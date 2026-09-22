@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.Properties;
+
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
@@ -11,28 +12,27 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * Testcontainers' Ryuk sidecar when the JVM exits.
  */
 final class PostgresSupport {
+  private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
 
-    private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
+  static {
+    POSTGRES.start();
+  }
 
-    static {
-        POSTGRES.start();
-    }
+  private PostgresSupport() {
+  }
 
-    private PostgresSupport() {
-    }
+  static Connection connect() throws SQLException {
+    return DriverManager.getConnection(jdbcUrl(), properties());
+  }
 
-    static String jdbcUrl() {
-        return POSTGRES.getJdbcUrl();
-    }
+  static String jdbcUrl() {
+    return POSTGRES.getJdbcUrl();
+  }
 
-    static Properties properties() {
-        Properties p = new Properties();
-        p.setProperty("user", POSTGRES.getUsername());
-        p.setProperty("password", POSTGRES.getPassword());
-        return p;
-    }
-
-    static Connection connect() throws SQLException {
-        return DriverManager.getConnection(jdbcUrl(), properties());
-    }
+  static Properties properties() {
+    Properties p = new Properties();
+    p.setProperty("user", POSTGRES.getUsername());
+    p.setProperty("password", POSTGRES.getPassword());
+    return p;
+  }
 }

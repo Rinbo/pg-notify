@@ -15,6 +15,8 @@
  */
 package se.docksidelabs.pgnotify;
 
+import java.io.Serial;
+
 /**
  * Thrown by {@link PgNotifier#notify} when a payload is too long for Postgres to accept.
  *
@@ -25,25 +27,29 @@ package se.docksidelabs.pgnotify;
  */
 public final class PayloadTooLargeException extends IllegalArgumentException {
 
-    private static final long serialVersionUID = 1L;
+  @Serial
+  private static final long serialVersionUID = 1L;
 
-    private final int actualBytes;
-    private final int maxBytes;
+  private final int actualBytes;
+  private final int maxBytes;
 
-    PayloadTooLargeException(int actualBytes, int maxBytes) {
-        super("notification payload is " + actualBytes + " bytes of UTF-8; Postgres allows at most "
-                + maxBytes);
-        this.actualBytes = actualBytes;
-        this.maxBytes = maxBytes;
-    }
+  PayloadTooLargeException(int actualBytes, int maxBytes) {
+    super("notification payload is " + actualBytes + " bytes of UTF-8; Postgres allows at most " + maxBytes);
+    this.actualBytes = actualBytes;
+    this.maxBytes = maxBytes;
+  }
 
-    /** Length of the rejected payload in bytes of UTF-8. */
-    public int actualBytes() {
-        return actualBytes;
-    }
+  /**
+   * Length of the rejected payload in bytes of UTF-8.
+   */
+  public int actualBytes() {
+    return actualBytes;
+  }
 
-    /** The limit that was exceeded, {@link PgNotifier#MAX_PAYLOAD_BYTES}. */
-    public int maxBytes() {
-        return maxBytes;
-    }
+  /**
+   * The limit that was exceeded, {@link PgNotifier#MAX_PAYLOAD_BYTES}.
+   */
+  public int maxBytes() {
+    return maxBytes;
+  }
 }
