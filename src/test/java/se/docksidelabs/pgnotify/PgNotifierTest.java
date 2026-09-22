@@ -26,6 +26,20 @@ class PgNotifierTest {
   private Connection subscriber;
   private String channel;
 
+  @BeforeEach
+  void connect() throws SQLException {
+    publisher = PostgresSupport.connect();
+    subscriber = PostgresSupport.connect();
+    channel = "t_" + UUID.randomUUID().toString().replace("-", "");
+    listen(channel);
+  }
+
+  @AfterEach
+  void disconnect() throws SQLException {
+    publisher.close();
+    subscriber.close();
+  }
+
   @Test
   void acceptsPayloadOf7999Bytes() throws SQLException {
     String payload = "x".repeat(PgNotifier.MAX_PAYLOAD_BYTES);
@@ -44,14 +58,6 @@ class PgNotifierTest {
 
     PgNotifier.notify(publisher, mixed.toLowerCase(), "to-lower");
     assertThat(poll(300)).isEmpty();
-  }
-
-  @BeforeEach
-  void connect() throws SQLException {
-    publisher = PostgresSupport.connect();
-    subscriber = PostgresSupport.connect();
-    channel = "t_" + UUID.randomUUID().toString().replace("-", "");
-    listen(channel);
   }
 
   @Test
@@ -74,12 +80,6 @@ class PgNotifierTest {
 
     publisher.commit();
     assertThat(await()).extracting(PGNotification::getParameter).containsExactly("pending");
-  }
-
-  @AfterEach
-  void disconnect() throws SQLException {
-    publisher.close();
-    subscriber.close();
   }
 
   @Test
