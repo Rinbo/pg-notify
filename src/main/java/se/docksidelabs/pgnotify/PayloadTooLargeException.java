@@ -21,34 +21,33 @@ import java.io.Serial;
  * Thrown by {@link PgNotifier#notify} when a payload is too long for Postgres to accept.
  *
  * <p>Postgres requires a notification payload to be shorter than 8000 bytes in the server encoding.
- * This library measures the payload as UTF-8 and assumes the database uses a UTF-8
- * {@code server_encoding}. The check happens before any SQL is sent, so the caller's transaction is
+ * This library measures the payload as UTF-8 and assumes the database uses a UTF-8 {@code
+ * server_encoding}. The check happens before any SQL is sent, so the caller's transaction is
  * untouched.
  */
 public final class PayloadTooLargeException extends IllegalArgumentException {
 
-  @Serial
-  private static final long serialVersionUID = 1L;
+  @Serial private static final long serialVersionUID = 1L;
 
   private final int actualBytes;
   private final int maxBytes;
 
   PayloadTooLargeException(int actualBytes, int maxBytes) {
-    super("notification payload is " + actualBytes + " bytes of UTF-8; Postgres allows at most " + maxBytes);
+    super(
+        "notification payload is "
+            + actualBytes
+            + " bytes of UTF-8; Postgres allows at most "
+            + maxBytes);
     this.actualBytes = actualBytes;
     this.maxBytes = maxBytes;
   }
 
-  /**
-   * Length of the rejected payload in bytes of UTF-8.
-   */
+  /** Length of the rejected payload in bytes of UTF-8. */
   public int actualBytes() {
     return actualBytes;
   }
 
-  /**
-   * The limit that was exceeded, {@link PgNotifier#MAX_PAYLOAD_BYTES}.
-   */
+  /** The limit that was exceeded, {@link PgNotifier#MAX_PAYLOAD_BYTES}. */
   public int maxBytes() {
     return maxBytes;
   }

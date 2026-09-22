@@ -20,20 +20,18 @@ import java.nio.charset.StandardCharsets;
 /**
  * Validation and quoting of notification channel names.
  *
- * <p>{@code LISTEN} and {@code UNLISTEN} take an identifier, not a parameter, so the channel name has
- * to be spliced into SQL text. We always emit it as a quoted identifier with embedded double quotes
- * doubled, which makes any string safe to splice. Quoting also preserves the case, so a channel registered
- * here matches {@code pg_notify('Name', ...)} byte for byte.
+ * <p>{@code LISTEN} and {@code UNLISTEN} take an identifier, not a parameter, so the channel name
+ * has to be spliced into SQL text. We always emit it as a quoted identifier with embedded double
+ * quotes doubled, which makes any string safe to splice. Quoting also preserves the case, so a
+ * channel registered here matches {@code pg_notify('Name', ...)} byte for byte.
  *
  * <p>Length is limited to 63 bytes of UTF-8 ({@code NAMEDATALEN - 1}). Postgres silently truncates
- * longer identifiers in {@code LISTEN}, which would subscribe to a different name than the one passed
- * to {@code pg_notify}, so we reject them up front.
+ * longer identifiers in {@code LISTEN}, which would subscribe to a different name than the one
+ * passed to {@code pg_notify}, so we reject them up front.
  */
 final class ChannelNames {
 
-  /**
-   * {@code NAMEDATALEN - 1}: the longest identifier Postgres keeps intact.
-   */
+  /** {@code NAMEDATALEN - 1}: the longest identifier Postgres keeps intact. */
   static final int MAX_BYTES = 63;
 
   private ChannelNames() {
@@ -44,8 +42,8 @@ final class ChannelNames {
    * Validates a channel name.
    *
    * @return the same name for chaining
-   * @throws IllegalArgumentException if the name is null, empty, longer than {@value #MAX_BYTES} bytes
-   *                                  of UTF-8, contains control characters, or is not valid Unicode
+   * @throws IllegalArgumentException if the name is null, empty, longer than {@value #MAX_BYTES}
+   *     bytes of UTF-8, contains control characters, or is not valid Unicode
    */
   static String validate(String name) {
     if (name == null) {
@@ -61,7 +59,10 @@ final class ChannelNames {
       if (Character.isISOControl(c)) {
         throw new IllegalArgumentException(
             "channel name must not contain control characters (found U+"
-            + String.format("%04X", (int) c) + " at index " + i + ")");
+                + String.format("%04X", (int) c)
+                + " at index "
+                + i
+                + ")");
       }
     }
 
@@ -72,16 +73,17 @@ final class ChannelNames {
     int bytes = name.getBytes(StandardCharsets.UTF_8).length;
     if (bytes > MAX_BYTES) {
       throw new IllegalArgumentException(
-          "channel name is " + bytes + " bytes of UTF-8; Postgres identifiers are limited to "
-          + MAX_BYTES + " bytes and longer names are silently truncated");
+          "channel name is "
+              + bytes
+              + " bytes of UTF-8; Postgres identifiers are limited to "
+              + MAX_BYTES
+              + " bytes and longer names are silently truncated");
     }
 
     return name;
   }
 
-  /**
-   * Returns the name as a quoted SQL identifier. The name must already be validated.
-   */
+  /** Returns the name as a quoted SQL identifier. The name must already be validated. */
   static String quote(String validName) {
     StringBuilder sb = new StringBuilder(validName.length() + 2);
     sb.append('"');

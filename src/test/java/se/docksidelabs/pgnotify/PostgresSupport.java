@@ -4,7 +4,6 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.Properties;
-
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
@@ -18,8 +17,7 @@ final class PostgresSupport {
     POSTGRES.start();
   }
 
-  private PostgresSupport() {
-  }
+  private PostgresSupport() {}
 
   static Connection connect() throws SQLException {
     return DriverManager.getConnection(jdbcUrl(), properties());

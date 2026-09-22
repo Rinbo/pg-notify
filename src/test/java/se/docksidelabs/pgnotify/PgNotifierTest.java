@@ -11,7 +11,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,8 +18,8 @@ import org.postgresql.PGConnection;
 import org.postgresql.PGNotification;
 
 /**
- * Exercises the publisher against a real Postgres, observing delivery through a raw pgjdbc LISTEN so
- * these tests do not depend on the listener half of the library.
+ * Exercises the publisher against a real Postgres, observing delivery through a raw pgjdbc LISTEN
+ * so these tests do not depend on the listener half of the library.
  */
 class PgNotifierTest {
   private Connection publisher;
@@ -121,8 +120,7 @@ class PgNotifierTest {
 
   @Test
   void rejectsInvalidChannelName() {
-    assertThatIllegalArgumentException()
-        .isThrownBy(() -> PgNotifier.notify(publisher, "", "x"));
+    assertThatIllegalArgumentException().isThrownBy(() -> PgNotifier.notify(publisher, "", "x"));
     assertThatIllegalArgumentException()
         .isThrownBy(() -> PgNotifier.notify(publisher, "y".repeat(64), "x"));
   }
@@ -135,11 +133,12 @@ class PgNotifierTest {
     assertThatThrownBy(() -> PgNotifier.notify(publisher, channel, payload))
         .isInstanceOf(PayloadTooLargeException.class)
         .isInstanceOf(IllegalArgumentException.class)
-        .satisfies(e -> {
-          PayloadTooLargeException ptl = (PayloadTooLargeException) e;
-          assertThat(ptl.actualBytes()).isEqualTo(8000);
-          assertThat(ptl.maxBytes()).isEqualTo(7999);
-        });
+        .satisfies(
+            e -> {
+              PayloadTooLargeException ptl = (PayloadTooLargeException) e;
+              assertThat(ptl.actualBytes()).isEqualTo(8000);
+              assertThat(ptl.maxBytes()).isEqualTo(7999);
+            });
 
     // Transaction is still usable: nothing was sent to the server.
     try (Statement st = publisher.createStatement()) {

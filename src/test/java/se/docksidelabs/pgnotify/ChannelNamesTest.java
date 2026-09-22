@@ -10,17 +10,18 @@ import org.junit.jupiter.params.provider.ValueSource;
 class ChannelNamesTest {
 
   @ParameterizedTest
-  @ValueSource(strings = {
-      "a",
-      "cache_invalidation",
-      "MixedCase",
-      "with-dash.and:colon",
-      "has space",
-      "has\"quote",
-      "unicode_åäö",
-      "1starts_with_digit",
-      "semicolon;drop table x",
-  })
+  @ValueSource(
+      strings = {
+        "a",
+        "cache_invalidation",
+        "MixedCase",
+        "with-dash.and:colon",
+        "has space",
+        "has\"quote",
+        "unicode_åäö",
+        "1starts_with_digit",
+        "semicolon;drop table x",
+      })
   void acceptsAnythingPrintableWithinLimit(String name) {
     assertThat(ChannelNames.validate(name)).isSameAs(name);
   }
@@ -59,7 +60,8 @@ class ChannelNamesTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"nul\u0000byte", "new\nline", "tab\tchar", "del\u007fchar", "esc\u001b[0m"})
+  @ValueSource(
+      strings = {"nul\u0000byte", "new\nline", "tab\tchar", "del\u007fchar", "esc\u001b[0m"})
   void rejectsControlCharacters(String name) {
     assertThatIllegalArgumentException()
         .isThrownBy(() -> ChannelNames.validate(name))
