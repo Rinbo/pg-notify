@@ -82,6 +82,13 @@ final class ListenerSession implements AutoCloseable {
     }
   }
 
+  /** Issues {@code UNLISTEN} for one channel. The name must already be validated. */
+  void unlisten(String channel) throws SQLException {
+    try (Statement st = connection.createStatement()) {
+      st.execute("UNLISTEN " + ChannelNames.quote(channel));
+    }
+  }
+
   /** Blocks up to {@code timeout} for notifications. Returns an empty list on timeout. */
   List<Notification> poll(Duration timeout) throws SQLException {
     PGNotification[] raw = pg.getNotifications((int) timeout.toMillis());

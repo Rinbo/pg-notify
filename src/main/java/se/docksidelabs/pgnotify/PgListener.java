@@ -22,6 +22,7 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -70,6 +71,7 @@ public final class PgListener implements AutoCloseable {
   private final HandlerExecutor executor;
   private final ConnectionCallbacks callbacks;
   private final Lifecycle lifecycle = new Lifecycle();
+  private final ChannelChanges changes = new ChannelChanges();
 
   /** Set by {@link #start()}; guarded by {@code this}. */
   private ListenerLoop loop;
@@ -145,6 +147,7 @@ public final class PgListener implements AutoCloseable {
             config,
             connectionProvider,
             registry,
+            changes,
             new SerialDispatcher(executor),
             lifecycle,
             callbacks,
@@ -169,37 +172,46 @@ public final class PgListener implements AutoCloseable {
   }
 
   /**
-   * Registers a handler for a channel.
+   * Registers a handler for a channel. Allowed at any time before {@link #close()}.
    *
    * <p>Several handlers may share a channel; they run in registration order. The channel name is
    * validated now: non-empty, at most 63 bytes of UTF-8, no control characters.
    *
-   * @return a subscription that removes the handler when closed
+   * <p>While the listener is running, the first handler on a new channel causes {@code LISTEN} to
+   * be issued within one poll timeout; notifications sent before that are not received. A channel
+   * registered while the listener is reconnecting is subscribed as part of the reconnect.
+   *
+   * @return a subscription that removes the handler when closed; closing the last one on a channel
+   *     issues {@code UNLISTEN}
    * @throws IllegalArgumentException if the channel name is invalid
-   * @throws IllegalStateException if the listener is closed, or has already been started (dynamic
-   *     subscriptions are not supported yet)
+   * @throws IllegalStateException if the listener is closed
    */
-  public synchronized Subscription listen(String channel, NotificationHandler handler) {
-    requireNotStarted("subscribing");
-    registry.add(channel, handler);
-    return () -> unsubscribe(channel, handler);
+  public Subscription listen(String channel, NotificationHandler handler) {
+    ChannelNames.validate(channel);
+    Objects.requireNonNull(handler, "handler");
+    synchronized (this) {
+      if (lifecycle.isClosed()) {
+        throw new IllegalStateException("listener is closed");
+      }
+      if (registry.add(channel, handler)) {
+        changes.listen(channel);
+      }
+    }
+    AtomicBoolean closed = new AtomicBoolean();
+    return () -> {
+      if (closed.compareAndSet(false, true)) {
+        unsubscribe(channel, handler);
+      }
+    };
   }
 
+  /** Registry update and the matching UNLISTEN are queued atomically, so order matches state. */
   private synchronized void unsubscribe(String channel, NotificationHandler handler) {
     if (lifecycle.isClosed()) {
       return;
     }
-    requireNotStarted("unsubscribing");
-    registry.remove(channel, handler);
-  }
-
-  private void requireNotStarted(String what) {
-    State current = lifecycle.state();
-    if (current == State.CLOSED) {
-      throw new IllegalStateException("listener is closed");
-    }
-    if (current != State.NEW) {
-      throw new IllegalStateException(what + " after start() is not supported yet");
+    if (registry.remove(channel, handler)) {
+      changes.unlisten(channel);
     }
   }
 

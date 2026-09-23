@@ -29,9 +29,12 @@ import se.docksidelabs.pgnotify.PgListener.State;
  *
  * <pre>
  * loop until closed:
- *   open session, LISTEN every channel            -- failure: RECONNECTING, onDisconnected, backoff
+ *   open session, LISTEN every registered channel -- failure: RECONNECTING, onDisconnected, backoff
  *   LISTENING; onConnected or onReconnected
- *   poll until closed; SELECT 1 when idle          -- failure: same as above
+ *   poll until closed:                             -- failure: same as above
+ *     dispatch notifications
+ *     apply queued LISTEN / UNLISTEN changes
+ *     SELECT 1 when idle
  * </pre>
  */
 final class ListenerLoop implements Runnable {
@@ -41,6 +44,7 @@ final class ListenerLoop implements Runnable {
   private final ListenerConfig config;
   private final ConnectionProvider connectionProvider;
   private final HandlerRegistry registry;
+  private final ChannelChanges changes;
   private final SerialDispatcher dispatcher;
   private final Lifecycle lifecycle;
   private final ConnectionCallbacks callbacks;
@@ -61,6 +65,7 @@ final class ListenerLoop implements Runnable {
       ListenerConfig config,
       ConnectionProvider connectionProvider,
       HandlerRegistry registry,
+      ChannelChanges changes,
       SerialDispatcher dispatcher,
       Lifecycle lifecycle,
       ConnectionCallbacks callbacks,
@@ -68,6 +73,7 @@ final class ListenerLoop implements Runnable {
     this.config = config;
     this.connectionProvider = connectionProvider;
     this.registry = registry;
+    this.changes = changes;
     this.dispatcher = dispatcher;
     this.lifecycle = lifecycle;
     this.callbacks = callbacks;
@@ -105,6 +111,7 @@ final class ListenerLoop implements Runnable {
     try (ListenerSession s = ListenerSession.open(connectionProvider, config.networkTimeout())) {
       session = s;
       try {
+        changes.drain(); // superseded by the snapshot taken next; anything queued after it is kept
         s.listen(registry.channels());
         if (lifecycle.isClosed()) {
           return;
@@ -151,11 +158,27 @@ final class ListenerLoop implements Runnable {
       if (!batch.isEmpty()) {
         idleSince = System.nanoTime();
         dispatch(batch);
+      }
+      if (applyChanges(s)) {
+        idleSince = System.nanoTime();
       } else if (System.nanoTime() - idleSince >= config.healthCheckInterval().toNanos()) {
         s.healthCheck();
         idleSince = System.nanoTime();
       }
     }
+  }
+
+  /** Issues queued LISTEN/UNLISTEN statements. Returns whether anything was sent. */
+  private boolean applyChanges(ListenerSession s) throws SQLException {
+    List<ChannelChanges.Change> pending = changes.drain();
+    for (ChannelChanges.Change change : pending) {
+      switch (change.kind()) {
+        case LISTEN -> s.listen(List.of(change.channel()));
+        case UNLISTEN -> s.unlisten(change.channel());
+      }
+      log.debug("{} {}", change.kind(), change.channel());
+    }
+    return !pending.isEmpty();
   }
 
   private void dispatch(List<Notification> batch) {

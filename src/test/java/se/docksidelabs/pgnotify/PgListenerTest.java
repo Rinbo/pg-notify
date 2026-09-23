@@ -187,14 +187,11 @@ class PgListenerTest {
   }
 
   @Test
-  void startIsIdempotentAndLateSubscriptionsAreRejected() throws Exception {
+  void startIsIdempotentAndCloseIsTerminal() throws Exception {
     PgListener listener = start(builder().listen(channel(), n -> {}));
 
     listener.start();
     assertThat(listener.state()).isEqualTo(PgListener.State.LISTENING);
-    assertThatIllegalStateException()
-        .isThrownBy(() -> listener.listen(channel(), n -> {}))
-        .withMessageContaining("after start()");
 
     listener.close();
     assertThatIllegalStateException().isThrownBy(listener::start).withMessageContaining("closed");
