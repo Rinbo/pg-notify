@@ -43,6 +43,16 @@ class HandlerRegistryTest {
   }
 
   @Test
+  void listsChannelsInFirstRegistrationOrder() {
+    registry.add("c", h1);
+    registry.add("a", h1);
+    registry.add("b", h1);
+    registry.add("c", h2);
+
+    assertThat(registry.channels()).containsExactly("c", "a", "b");
+  }
+
+  @Test
   void handsOutSnapshots() {
     registry.add("a", h1);
     List<NotificationHandler> snapshot = registry.handlersFor("a");

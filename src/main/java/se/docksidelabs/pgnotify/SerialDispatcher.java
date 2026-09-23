@@ -31,11 +31,16 @@ import org.slf4j.LoggerFactory;
  * <p>Each channel has its own queue. At most one task per channel is ever handed to the executor at
  * a time; when it finishes, the next one for that channel is submitted. Channels therefore proceed
  * independently on a multithreaded executor, and within a channel notifications are handled in
- * arrival order regardless of how many threads the executor has.
+ * arrival order regardless of how many threads the executor has. A queue lives only while its
+ * channel has work: once drained it is retired and removed, so channels that come and go do not
+ * accumulate.
  *
  * <p>Queues are unbounded. Delivery is at-most-once anyway, and blocking the listener thread would
  * only move the backlog into Postgres' own notification queue. For the same reason an executor that
  * rejects work costs notifications, never the listener: the channel's queue is dropped and logged.
+ * The executor is never called while a queue lock is held, so an executor that blocks in {@code
+ * execute} cannot deadlock against a handler finishing. It can still stall the listener thread, as
+ * can a {@code CallerRunsPolicy}, which makes the listener thread run the handler itself.
  */
 final class SerialDispatcher {
 
@@ -53,15 +58,33 @@ final class SerialDispatcher {
    * the executor rejects the work, the channel's queued notifications are dropped with a warning.
    */
   void dispatch(Notification notification, List<NotificationHandler> handlers) {
-    queues
-        .computeIfAbsent(notification.channel(), ChannelQueue::new)
-        .submit(() -> deliver(notification, handlers));
+    Runnable task = () -> deliver(notification, handlers);
+    while (true) {
+      ChannelQueue queue = queues.computeIfAbsent(notification.channel(), ChannelQueue::new);
+      if (queue.submit(task)) {
+        return;
+      }
+      // The queue drained and retired between the lookup and the submit; a fresh one takes over.
+    }
+  }
+
+  /** Channels that currently have a queue, that is, work queued or running. */
+  int activeChannels() {
+    return queues.size();
   }
 
   private static void deliver(Notification n, List<NotificationHandler> handlers) {
     for (NotificationHandler handler : handlers) {
       try {
         handler.handle(n);
+      } catch (InterruptedException e) {
+        // The executor is shutting down: keep the flag so the thread can stop, skip the rest.
+        Thread.currentThread().interrupt();
+        log.warn(
+            "Handler {} interrupted on channel '{}'; skipping remaining handlers",
+            handler,
+            n.channel());
+        return;
       } catch (VirtualMachineError e) {
         throw e;
       } catch (Throwable t) {
@@ -75,49 +98,86 @@ final class SerialDispatcher {
     }
   }
 
-  /** The SerialExecutor pattern from the {@link Executor} javadoc, one per channel. */
+  /**
+   * The SerialExecutor pattern from the {@link Executor} javadoc, one per channel, with two
+   * changes: the executor is called outside the lock, and the queue retires itself once idle.
+   */
   private final class ChannelQueue {
     private final String channel;
+    private final Object lock = new Object();
+
+    /** Guarded by {@link #lock}. */
     private final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
+
+    /** Guarded by {@link #lock}. Whether a task for this channel is with the executor. */
     private boolean active;
+
+    /** Guarded by {@link #lock}. Set once, when the queue is removed from the map. */
+    private boolean retired;
 
     ChannelQueue(String channel) {
       this.channel = channel;
     }
 
-    synchronized void submit(Runnable task) {
-      tasks.add(task);
-      if (!active) {
-        scheduleNext();
+    /** Returns {@code false} if this queue has retired and the caller must use a new one. */
+    boolean submit(Runnable task) {
+      synchronized (lock) {
+        if (retired) {
+          return false;
+        }
+        if (active) {
+          tasks.add(task);
+          return true;
+        }
+        active = true;
       }
+      execute(task);
+      return true;
     }
 
-    private synchronized void scheduleNext() {
-      Runnable next = tasks.poll();
-      if (next == null) {
-        active = false;
-        return;
-      }
-      active = true;
+    /** Hands {@code task} to the executor. Called with {@code active} set and the lock released. */
+    private void execute(Runnable task) {
       try {
         executor.execute(
             () -> {
               try {
-                next.run();
+                task.run();
               } finally {
-                scheduleNext();
+                next();
               }
             });
       } catch (RejectedExecutionException e) {
-        int dropped = tasks.size() + 1;
-        tasks.clear();
-        active = false;
+        int dropped;
+        synchronized (lock) {
+          dropped = tasks.size() + 1;
+          tasks.clear();
+          retire();
+        }
         log.warn(
             "Handler executor rejected work on channel '{}'; dropped {} notification(s): {}",
             channel,
             dropped,
             e.toString());
       }
+    }
+
+    private void next() {
+      Runnable task;
+      synchronized (lock) {
+        task = tasks.poll();
+        if (task == null) {
+          retire();
+          return;
+        }
+      }
+      execute(task);
+    }
+
+    /** Leaves the map. Must hold {@link #lock}; nothing is queued or running afterwards. */
+    private void retire() {
+      active = false;
+      retired = true;
+      queues.remove(channel, this);
     }
   }
 }

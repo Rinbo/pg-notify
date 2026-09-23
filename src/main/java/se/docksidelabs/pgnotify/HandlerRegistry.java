@@ -20,14 +20,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Which handlers are registered on which channels.
  *
  * <p>Thread-safe. Every method is guarded by the instance monitor, and every collection handed out
- * is a snapshot, so callers never observe a concurrent modification. Channel names are validated on
- * the way in, so anything stored here is safe to splice into {@code LISTEN}.
+ * is a snapshot, so callers never observe a concurrent modification. This is the one place channel
+ * names are validated: {@link #add} rejects a bad name or a null handler before anything is stored,
+ * so whatever is in here is safe to splice into {@code LISTEN}.
  */
 final class HandlerRegistry {
 
@@ -68,8 +68,8 @@ final class HandlerRegistry {
   }
 
   /** Channels with at least one handler, in first-registration order. Snapshot. */
-  synchronized Set<String> channels() {
-    return Set.copyOf(handlers.keySet());
+  synchronized List<String> channels() {
+    return List.copyOf(handlers.keySet());
   }
 
   synchronized int channelCount() {

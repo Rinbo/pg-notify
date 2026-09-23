@@ -22,7 +22,9 @@ import java.util.Objects;
 /**
  * Describes a recovered connection, see {@link ConnectionListener#onReconnected}.
  *
- * @param disconnectedAt when the previous connection was lost
+ * @param disconnectedAt when the previous connection was last known to be alive, which is the last
+ *     time it delivered data or completed a statement. A peer that dies silently is only noticed by
+ *     the next health check, so this is earlier than the detection, never later
  * @param reconnectedAt when the new connection was subscribed to every channel
  * @param attempts how many connection attempts it took, at least 1
  */
@@ -37,7 +39,11 @@ public record ReconnectEvent(Instant disconnectedAt, Instant reconnectedAt, int 
     }
   }
 
-  /** The window during which notifications were lost. */
+  /**
+   * The window during which notifications may have been lost. It starts at the last proof of life
+   * of the old connection, so it errs on the long side: everything published in it should be
+   * treated as missed.
+   */
   public Duration downtime() {
     return Duration.between(disconnectedAt, reconnectedAt);
   }

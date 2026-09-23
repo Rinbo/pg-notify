@@ -127,8 +127,8 @@ owns, so a slow handler never delays the read loop.
   time in the order Postgres delivered them, even if you supply a thread pool. Different channels
   proceed independently on a pool.
 - **Multiple handlers** on one channel run in registration order for each notification.
-- **Handler exceptions**, including `Error`s, are logged at WARN and ignored. The next notification is
-  delivered as usual and the connection is unaffected.
+- **Handler exceptions**, including `Error`s other than `VirtualMachineError`s, are logged at WARN
+  and ignored. The next notification is delivered as usual and the connection is unaffected.
 - **Queues are unbounded.** Delivery is already at-most-once, and blocking the reader would only move
   the backlog into Postgres' own notification queue.
 - `close()` waits for the listener thread, then lets queued handler work finish for up to

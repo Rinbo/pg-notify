@@ -7,7 +7,12 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 /** Unit tests for the per-channel serialisation, driven by a hand-cranked executor. */
@@ -108,5 +113,107 @@ class SerialDispatcherTest {
     executor.runAll();
 
     assertThat(log).containsExactly("ok:a:2");
+  }
+
+  @Test
+  void retiresAChannelQueueOnceItIsDrained() {
+    NotificationHandler h = recording("h");
+    dispatcher.dispatch(n("a", "1"), List.of(h));
+    dispatcher.dispatch(n("a", "2"), List.of(h));
+    assertThat(dispatcher.activeChannels()).isEqualTo(1);
+
+    executor.runOne();
+    assertThat(dispatcher.activeChannels()).as("still one task queued").isEqualTo(1);
+    executor.runAll();
+    assertThat(dispatcher.activeChannels()).as("nothing left for the channel").isZero();
+
+    dispatcher.dispatch(n("a", "3"), List.of(h));
+    executor.runAll();
+    assertThat(log).containsExactly("h:a:1", "h:a:2", "h:a:3");
+    assertThat(dispatcher.activeChannels()).isZero();
+  }
+
+  @Test
+  void dropsTheChannelQueueWhenTheExecutorRejects() {
+    Executor rejecting =
+        r -> {
+          throw new RejectedExecutionException("full");
+        };
+    SerialDispatcher d = new SerialDispatcher(rejecting);
+    d.dispatch(n("a", "1"), List.of(recording("h")));
+
+    assertThat(d.activeChannels()).isZero();
+    assertThat(log).isEmpty();
+  }
+
+  @Test
+  void keepsTheInterruptAndSkipsRemainingHandlers() {
+    NotificationHandler interrupted =
+        n -> {
+          throw new InterruptedException("shutting down");
+        };
+    dispatcher.dispatch(n("a", "1"), List.of(interrupted, recording("after")));
+    dispatcher.dispatch(n("a", "2"), List.of(recording("next")));
+
+    try {
+      executor.runOne();
+      assertThat(Thread.currentThread().isInterrupted()).as("flag restored").isTrue();
+      assertThat(log).as("later handlers of the same notification skipped").isEmpty();
+    } finally {
+      assertThat(Thread.interrupted()).isTrue(); // clears the flag for the rest of the test
+    }
+    executor.runAll();
+    assertThat(log).containsExactly("next:a:2");
+  }
+
+  /**
+   * An executor whose {@code execute} blocks while its queue is full must not deadlock against a
+   * handler thread that needs the channel lock to hand in the next task.
+   */
+  @Test
+  void doesNotDeadlockOnAnExecutorThatBlocksInExecute() throws Exception {
+    BlockingQueue<Runnable> queue = new ArrayBlockingQueue<>(1);
+    Executor blocking =
+        r -> {
+          try {
+            queue.put(r);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RejectedExecutionException(e);
+          }
+        };
+    Thread worker =
+        new Thread(
+            () -> {
+              try {
+                while (true) {
+                  queue.take().run();
+                }
+              } catch (InterruptedException e) {
+                // done
+              }
+            },
+            "worker");
+    worker.setDaemon(true);
+    worker.start();
+    SerialDispatcher d = new SerialDispatcher(blocking);
+    int count = 200;
+    CountDownLatch done = new CountDownLatch(count);
+    NotificationHandler h = n -> done.countDown();
+
+    Thread producer =
+        new Thread(
+            () -> {
+              for (int i = 0; i < count; i++) {
+                d.dispatch(n("a", Integer.toString(i)), List.of(h));
+              }
+            },
+            "producer");
+    producer.start();
+
+    assertThat(done.await(10, TimeUnit.SECONDS)).as("all notifications handled").isTrue();
+    producer.join(5_000);
+    assertThat(producer.isAlive()).as("dispatching thread returned").isFalse();
+    worker.interrupt();
   }
 }

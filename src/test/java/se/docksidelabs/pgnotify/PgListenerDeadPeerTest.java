@@ -7,6 +7,7 @@ import eu.rekawek.toxiproxy.model.toxic.Timeout;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -87,6 +88,7 @@ class PgListenerDeadPeerTest {
     assertThat(received.poll(5, TimeUnit.SECONDS)).isEqualTo("through-proxy");
 
     long cutAt = System.nanoTime();
+    Instant cutInstant = Instant.now();
     toxic = ToxiproxySupport.proxy().toxics().timeout("silence", ToxicDirection.DOWNSTREAM, 0);
 
     Long noticedAt = disconnectedAtNanos.poll(10, TimeUnit.SECONDS);
@@ -114,6 +116,12 @@ class PgListenerDeadPeerTest {
     assertThat(event).isNotNull();
     assertThat(event.attempts()).isGreaterThan(1);
     assertThat(event.downtime()).isGreaterThan(LOGIN_TIMEOUT);
+    assertThat(event.disconnectedAt())
+        .as("stamped with the last proof of life, which is before the cut, not the detection")
+        .isBeforeOrEqualTo(cutInstant);
+    assertThat(event.downtime())
+        .as("covers everything published since the cut")
+        .isGreaterThanOrEqualTo(Duration.between(cutInstant, event.reconnectedAt()));
     PgNotifier.notify(admin, channel, "after-recovery");
     assertThat(received.poll(5, TimeUnit.SECONDS)).isEqualTo("after-recovery");
   }

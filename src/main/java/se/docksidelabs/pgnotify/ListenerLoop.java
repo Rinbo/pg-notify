@@ -66,7 +66,16 @@ final class ListenerLoop implements Runnable {
    */
   private int attempts;
 
-  /** When the last good connection was lost; {@code null} while connected. */
+  /**
+   * When the last good connection was last known to be alive: a completed round trip or received
+   * data. A dead peer is only detected some time after it died, so this, not the detection time,
+   * bounds the window in which notifications were lost.
+   */
+  private Instant lastAlive;
+
+  /**
+   * {@link #lastAlive} as of the loss of the last good connection; {@code null} while connected.
+   */
   private Instant disconnectedAt;
 
   private boolean everConnected;
@@ -123,8 +132,12 @@ final class ListenerLoop implements Runnable {
     try (ListenerSession s = ListenerSession.open(connectionProvider, config.networkTimeout())) {
       session = s;
       try {
+        if (lifecycle.isClosed()) {
+          return; // close() gave up waiting for a slow provider; do not LISTEN just to hang up
+        }
         changes.drain(); // superseded by the snapshot taken next; anything queued after it is kept
         s.listen(registry.channels());
+        lastAlive = Instant.now();
         if (lifecycle.isClosed()) {
           return;
         }
@@ -170,13 +183,16 @@ final class ListenerLoop implements Runnable {
       List<Notification> batch = s.poll(config.pollTimeout());
       if (!batch.isEmpty()) {
         idleSince = System.nanoTime();
+        lastAlive = Instant.now();
         dispatch(batch);
       }
       if (applyChanges(s)) {
         idleSince = System.nanoTime();
+        lastAlive = Instant.now();
       } else if (System.nanoTime() - idleSince >= config.healthCheckInterval().toNanos()) {
         s.healthCheck();
         idleSince = System.nanoTime();
+        lastAlive = Instant.now();
       }
     }
   }
@@ -219,7 +235,7 @@ final class ListenerLoop implements Runnable {
     boolean sessionLost = attempts == 0;
     failures++;
     if (disconnectedAt == null) {
-      disconnectedAt = Instant.now();
+      disconnectedAt = lastAlive != null ? lastAlive : Instant.now();
     }
     lifecycle.moveTo(State.RECONNECTING);
     Duration delay = reconnectPolicy.delay(failures);

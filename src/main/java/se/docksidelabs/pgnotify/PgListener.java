@@ -191,13 +191,11 @@ public final class PgListener implements AutoCloseable {
    * @throws IllegalStateException if the listener is closed
    */
   public Subscription listen(String channel, NotificationHandler handler) {
-    ChannelNames.validate(channel);
-    Objects.requireNonNull(handler, "handler");
     synchronized (this) {
       if (lifecycle.isClosed()) {
         throw new IllegalStateException("listener is closed");
       }
-      if (registry.add(channel, handler)) {
+      if (registry.add(channel, handler)) { // validates the name and the handler
         changes.listen(channel);
       }
     }
@@ -230,6 +228,13 @@ public final class PgListener implements AutoCloseable {
    * <p>Waits for the listener thread to exit, then shuts down the owned handler executor, allowing
    * queued handler work up to the configured shutdown timeout before interrupting it. A
    * user-supplied executor is left running.
+   *
+   * <p>The wait for the listener thread is bounded. A poll or backoff sleep ends within about one
+   * poll timeout; a blocked read is unblocked by aborting the connection. The one thing this method
+   * cannot interrupt is a {@link ConnectionProvider} that is still opening a connection, so it may
+   * return while that call is in progress. The thread then closes whatever the provider returns and
+   * exits without subscribing. In URL mode the provider is bounded by {@code loginTimeout}, ten
+   * seconds unless overridden.
    */
   @Override
   public void close() {
@@ -266,10 +271,8 @@ public final class PgListener implements AutoCloseable {
 
     private static final AtomicInteger COUNTER = new AtomicInteger();
 
-    private record Registration(String channel, NotificationHandler handler) {}
-
     private final ConnectionProvider connectionProvider;
-    private final List<Registration> registrations = new ArrayList<>();
+    private final HandlerRegistry registry = new HandlerRegistry();
     private final List<ConnectionListener> connectionListeners = new ArrayList<>();
     private ListenerConfig config = ListenerConfig.DEFAULTS;
     private Executor handlerExecutor;
@@ -280,9 +283,7 @@ public final class PgListener implements AutoCloseable {
 
     /** Registers a handler; same rules as {@link PgListener#listen}. */
     public Builder listen(String channel, NotificationHandler handler) {
-      ChannelNames.validate(channel);
-      Objects.requireNonNull(handler, "handler");
-      registrations.add(new Registration(channel, handler));
+      registry.add(channel, handler); // validates the name and the handler
       return this;
     }
 
@@ -374,8 +375,6 @@ public final class PgListener implements AutoCloseable {
     /** Creates the listener. It is not started. */
     public PgListener build() {
       String name = "pg-notify-" + COUNTER.incrementAndGet();
-      HandlerRegistry registry = new HandlerRegistry();
-      registrations.forEach(r -> registry.add(r.channel(), r.handler()));
       HandlerExecutor executor =
           handlerExecutor == null
               ? HandlerExecutor.owned(name + "-handler")

@@ -21,6 +21,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -90,7 +91,8 @@ class PgListenerTest {
     String fast = channel();
     List<Integer> slowSeen = Collections.synchronizedList(new ArrayList<>());
     List<Integer> fastSeen = Collections.synchronizedList(new ArrayList<>());
-    long[] finishedAt = new long[2];
+    AtomicLong slowFinishedAt = new AtomicLong();
+    AtomicLong fastFinishedAt = new AtomicLong();
     ExecutorService pool = pool(4);
 
     start(
@@ -102,7 +104,7 @@ class PgListenerTest {
                   Thread.sleep(15);
                   slowSeen.add(Integer.parseInt(n.payload()));
                   if (slowSeen.size() == count) {
-                    finishedAt[0] = System.nanoTime();
+                    slowFinishedAt.set(System.nanoTime());
                   }
                 })
             .listen(
@@ -110,7 +112,7 @@ class PgListenerTest {
                 n -> {
                   fastSeen.add(Integer.parseInt(n.payload()));
                   if (fastSeen.size() == count) {
-                    finishedAt[1] = System.nanoTime();
+                    fastFinishedAt.set(System.nanoTime());
                   }
                 }));
 
@@ -126,7 +128,9 @@ class PgListenerTest {
     List<Integer> expected = IntStream.range(0, count).boxed().toList();
     assertThat(slowSeen).containsExactlyElementsOf(expected);
     assertThat(fastSeen).containsExactlyElementsOf(expected);
-    assertThat(finishedAt[1]).as("fast channel finished before slow one").isLessThan(finishedAt[0]);
+    assertThat(fastFinishedAt.get())
+        .as("fast channel finished before slow one")
+        .isLessThan(slowFinishedAt.get());
   }
 
   @Test
@@ -226,6 +230,49 @@ class PgListenerTest {
 
     listener.close(); // no-op
     assertThat(listener.state()).isEqualTo(PgListener.State.CLOSED);
+  }
+
+  @Test
+  void closeReturnsWhileTheProviderIsStillOpening() throws Exception {
+    CountDownLatch release = new CountDownLatch(1);
+    CountDownLatch opening = new CountDownLatch(1);
+    ConnectionProvider stuck =
+        () -> {
+          opening.countDown();
+          try {
+            release.await();
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SQLException("interrupted", e);
+          }
+          return PostgresSupport.connect();
+        };
+    PgListener listener =
+        PgListener.builder(stuck)
+            .pollTimeout(Duration.ofMillis(100))
+            .listen(channel(), n -> {})
+            .build();
+    listeners.add(listener);
+    listener.start();
+    assertThat(opening.await(5, TimeUnit.SECONDS)).isTrue();
+
+    long before = System.nanoTime();
+    listener.close();
+    Duration took = Duration.ofNanos(System.nanoTime() - before);
+    assertThat(took).as("close is bounded even though the provider hangs").isLessThan(STARTUP);
+    assertThat(listener.state()).isEqualTo(PgListener.State.CLOSED);
+    assertThat(liveThreadsNamed("pg-notify-"))
+        .as("listener thread still in the provider")
+        .isNotEmpty();
+
+    release.countDown();
+    awaitSessionCount(0);
+    for (int i = 0; i < 50 && !liveThreadsNamed("pg-notify-").isEmpty(); i++) {
+      Thread.sleep(100);
+    }
+    assertThat(liveThreadsNamed("pg-notify-"))
+        .as("thread exits once the provider returns")
+        .isEmpty();
   }
 
   @Test
