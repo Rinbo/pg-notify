@@ -246,4 +246,22 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <!--
+        google-java-format is compiled for Java 21, so the formatting check cannot run on the
+        Java 17 floor. Compiling and testing on 17 is what matters there; the check runs on every
+        newer JDK, locally and in the other CI legs.
+      -->
+      <id>no-formatter-before-21</id>
+      <activation>
+        <jdk>[,21)</jdk>
+      </activation>
+      <properties>
+        <spotless.check.skip>true</spotless.check.skip>
+        <spotless.apply.skip>true</spotless.apply.skip>
+      </properties>
+    </profile>
+  </profiles>
 </project>
