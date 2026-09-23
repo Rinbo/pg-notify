@@ -281,22 +281,6 @@ class PgListenerTest {
     assertThat(received.poll(5, TimeUnit.SECONDS)).isEqualTo("via-supplier");
   }
 
-  @Test
-  void failedInitialConnectionEndsInClosedState() throws Exception {
-    PgListener listener =
-        PgListener.builder(
-                () -> {
-                  throw new IllegalStateException("no database for you");
-                })
-            .listen(channel(), n -> {})
-            .build();
-    listeners.add(listener);
-    listener.start();
-
-    assertThat(listener.awaitListening(STARTUP)).isFalse();
-    assertThat(listener.state()).isEqualTo(PgListener.State.CLOSED);
-  }
-
   // ---- helpers ------------------------------------------------------------------------------
 
   private static PgListener.Builder builder() {

@@ -21,7 +21,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /**
  * Listens for Postgres notifications on a dedicated connection and hands them to handlers.
@@ -55,7 +57,7 @@ public final class PgListener implements AutoCloseable {
     CONNECTING,
     /** Connected and subscribed to every registered channel. */
     LISTENING,
-    /** Connection lost; waiting to reconnect. */
+    /** Connection lost or a connection attempt failed; retrying with backoff. */
     RECONNECTING,
     /** {@link #close()} called, or the listener stopped on its own. Terminal. */
     CLOSED
@@ -66,6 +68,7 @@ public final class PgListener implements AutoCloseable {
   private final ConnectionProvider connectionProvider;
   private final HandlerRegistry registry;
   private final HandlerExecutor executor;
+  private final ConnectionCallbacks callbacks;
   private final Lifecycle lifecycle = new Lifecycle();
 
   /** Set by {@link #start()}; guarded by {@code this}. */
@@ -78,12 +81,14 @@ public final class PgListener implements AutoCloseable {
       ListenerConfig config,
       ConnectionProvider connectionProvider,
       HandlerRegistry registry,
-      HandlerExecutor executor) {
+      HandlerExecutor executor,
+      ConnectionCallbacks callbacks) {
     this.name = name;
     this.config = config;
     this.connectionProvider = connectionProvider;
     this.registry = registry;
     this.executor = executor;
+    this.callbacks = callbacks;
   }
 
   /**
@@ -121,8 +126,10 @@ public final class PgListener implements AutoCloseable {
   /**
    * Starts the listener thread and returns immediately. Idempotent.
    *
-   * <p>The connection is opened on the listener thread. Use {@link #awaitListening} to block until
-   * the listener is subscribed, for example during application startup.
+   * <p>The connection is opened on the listener thread. A failed first connection is retried with
+   * backoff like any other; the listener never gives up until {@link #close()}. Use {@link
+   * #awaitListening} to block until the listener is subscribed, for example during application
+   * startup, if you would rather fail fast.
    *
    * @throws IllegalStateException if the listener has been closed
    */
@@ -135,7 +142,14 @@ public final class PgListener implements AutoCloseable {
     }
     loop =
         new ListenerLoop(
-            config, connectionProvider, registry, new SerialDispatcher(executor), lifecycle);
+            config,
+            connectionProvider,
+            registry,
+            new SerialDispatcher(executor),
+            lifecycle,
+            callbacks,
+            new ReconnectPolicy(
+                config.backoffInitial(), config.backoffMax(), ThreadLocalRandom.current()));
     thread = new Thread(loop, name + "-listener");
     thread.setDaemon(true);
     thread.start();
@@ -213,7 +227,6 @@ public final class PgListener implements AutoCloseable {
       l = loop;
     }
     if (t != null && t != Thread.currentThread()) {
-      t.interrupt();
       join(t, config.pollTimeout().plusSeconds(2));
       if (t.isAlive()) {
         l.abortSession();
@@ -240,6 +253,7 @@ public final class PgListener implements AutoCloseable {
 
     private final ConnectionProvider connectionProvider;
     private final List<Registration> registrations = new ArrayList<>();
+    private final List<ConnectionListener> connectionListeners = new ArrayList<>();
     private ListenerConfig config = ListenerConfig.DEFAULTS;
     private Executor handlerExecutor;
 
@@ -262,6 +276,54 @@ public final class PgListener implements AutoCloseable {
      */
     public Builder handlerExecutor(Executor executor) {
       this.handlerExecutor = Objects.requireNonNull(executor, "executor");
+      return this;
+    }
+
+    /**
+     * Called when the connection comes up, goes down, or comes back. May be called more than once;
+     * listeners are notified in registration order.
+     *
+     * <p>Every application should handle {@link ConnectionListener#onReconnected}: notifications
+     * sent during the outage are lost, so resynchronise there.
+     */
+    public Builder connectionListener(ConnectionListener listener) {
+      connectionListeners.add(Objects.requireNonNull(listener, "listener"));
+      return this;
+    }
+
+    /**
+     * Shorthand for a {@link ConnectionListener} that only handles {@link
+     * ConnectionListener#onReconnected}. This is the callback every application should register:
+     * notifications sent during the outage are lost, so resynchronise here, for example by flushing
+     * the cache the notifications keep fresh.
+     */
+    public Builder onReconnect(Consumer<ReconnectEvent> callback) {
+      Objects.requireNonNull(callback, "callback");
+      return connectionListener(
+          new ConnectionListener() {
+            @Override
+            public void onReconnected(ReconnectEvent event) {
+              callback.accept(event);
+            }
+          });
+    }
+
+    /**
+     * How long the connection may be silent before the listener sends {@code SELECT 1} to check it
+     * is alive. Incoming notifications count as traffic and defer the check. A dead peer is
+     * detected within about this interval plus the network timeout. Default 30 seconds.
+     */
+    public Builder healthCheckInterval(Duration interval) {
+      config = config.withHealthCheckInterval(interval);
+      return this;
+    }
+
+    /**
+     * Reconnect backoff. The delay before attempt {@code n+1} is random between zero and {@code
+     * min(max, initial * 2^(n-1))}. Default 500 ms to 30 seconds.
+     */
+    public Builder backoff(Duration initial, Duration max) {
+      config = config.withBackoff(initial, max);
       return this;
     }
 
@@ -301,7 +363,13 @@ public final class PgListener implements AutoCloseable {
           handlerExecutor == null
               ? HandlerExecutor.owned(name + "-handler")
               : HandlerExecutor.supplied(handlerExecutor);
-      return new PgListener(name, config, connectionProvider, registry, executor);
+      return new PgListener(
+          name,
+          config,
+          connectionProvider,
+          registry,
+          executor,
+          new ConnectionCallbacks(connectionListeners));
     }
   }
 }

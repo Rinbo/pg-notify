@@ -24,11 +24,14 @@ final class ConnectionProviders {
 
   static final String DEFAULT_APPLICATION_NAME = "pg-notify";
 
+  /** A hung handshake would stall the reconnect loop forever; pgjdbc's default is no limit. */
+  static final String DEFAULT_LOGIN_TIMEOUT_SECONDS = "10";
+
   private ConnectionProviders() {}
 
   /**
-   * Connects through {@link DriverManager}. Adds {@code tcpKeepAlive=true} and {@code
-   * ApplicationName} unless the caller's properties already set them.
+   * Connects through {@link DriverManager}. Adds {@code tcpKeepAlive=true}, {@code ApplicationName}
+   * and a {@code loginTimeout} unless the caller's properties already set them.
    */
   static ConnectionProvider forUrl(String jdbcUrl, Properties properties) {
     Objects.requireNonNull(jdbcUrl, "jdbcUrl");
@@ -40,6 +43,7 @@ final class ConnectionProviders {
     }
     effective.putIfAbsent("ApplicationName", DEFAULT_APPLICATION_NAME);
     effective.putIfAbsent("tcpKeepAlive", "true");
+    effective.putIfAbsent("loginTimeout", DEFAULT_LOGIN_TIMEOUT_SECONDS);
     return () -> DriverManager.getConnection(jdbcUrl, effective);
   }
 }

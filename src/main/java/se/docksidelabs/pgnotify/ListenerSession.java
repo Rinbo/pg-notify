@@ -95,6 +95,13 @@ final class ListenerSession implements AutoCloseable {
     return out;
   }
 
+  /** A cheap round trip to prove the connection is alive. Bounded by the network timeout. */
+  void healthCheck() throws SQLException {
+    try (Statement st = connection.createStatement()) {
+      st.execute("SELECT 1");
+    }
+  }
+
   int backendPid() {
     return pg.getBackendPID();
   }
