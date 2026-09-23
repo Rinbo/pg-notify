@@ -25,28 +25,64 @@ import java.util.Objects;
  *     shutdown
  * @param networkTimeout socket read timeout for everything on the connection except the poll
  * @param shutdownTimeout how long {@code close()} waits for queued handler work before interrupting
+ * @param healthCheckInterval how long the connection may be silent before a {@code SELECT 1} probes
+ *     it
+ * @param backoffInitial cap on the first reconnect delay
+ * @param backoffMax cap on every reconnect delay
  */
-record ListenerConfig(Duration pollTimeout, Duration networkTimeout, Duration shutdownTimeout) {
+record ListenerConfig(
+    Duration pollTimeout,
+    Duration networkTimeout,
+    Duration shutdownTimeout,
+    Duration healthCheckInterval,
+    Duration backoffInitial,
+    Duration backoffMax) {
 
   static final ListenerConfig DEFAULTS =
-      new ListenerConfig(Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofSeconds(10));
+      new ListenerConfig(
+          Duration.ofSeconds(1),
+          Duration.ofSeconds(10),
+          Duration.ofSeconds(10),
+          Duration.ofSeconds(30),
+          Duration.ofMillis(500),
+          Duration.ofSeconds(30));
 
   ListenerConfig {
     requireMillisRange(pollTimeout, "pollTimeout");
     requireMillisRange(networkTimeout, "networkTimeout");
     requireMillisRange(shutdownTimeout, "shutdownTimeout");
+    requireMillisRange(healthCheckInterval, "healthCheckInterval");
+    requireMillisRange(backoffInitial, "backoff initial");
+    requireMillisRange(backoffMax, "backoff max");
+    if (backoffInitial.compareTo(backoffMax) > 0) {
+      throw new IllegalArgumentException(
+          "backoff initial " + backoffInitial + " exceeds max " + backoffMax);
+    }
   }
 
   ListenerConfig withPollTimeout(Duration d) {
-    return new ListenerConfig(d, networkTimeout, shutdownTimeout);
+    return new ListenerConfig(
+        d, networkTimeout, shutdownTimeout, healthCheckInterval, backoffInitial, backoffMax);
   }
 
   ListenerConfig withNetworkTimeout(Duration d) {
-    return new ListenerConfig(pollTimeout, d, shutdownTimeout);
+    return new ListenerConfig(
+        pollTimeout, d, shutdownTimeout, healthCheckInterval, backoffInitial, backoffMax);
   }
 
   ListenerConfig withShutdownTimeout(Duration d) {
-    return new ListenerConfig(pollTimeout, networkTimeout, d);
+    return new ListenerConfig(
+        pollTimeout, networkTimeout, d, healthCheckInterval, backoffInitial, backoffMax);
+  }
+
+  ListenerConfig withHealthCheckInterval(Duration d) {
+    return new ListenerConfig(
+        pollTimeout, networkTimeout, shutdownTimeout, d, backoffInitial, backoffMax);
+  }
+
+  ListenerConfig withBackoff(Duration initial, Duration max) {
+    return new ListenerConfig(
+        pollTimeout, networkTimeout, shutdownTimeout, healthCheckInterval, initial, max);
   }
 
   /** JDBC and pgjdbc take timeouts as {@code int} milliseconds, so that is the legal range. */
