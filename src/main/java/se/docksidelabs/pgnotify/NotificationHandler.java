@@ -23,7 +23,7 @@ package se.docksidelabs.pgnotify;
  * handlers one at a time, in the order Postgres delivered them.
  *
  * <p>Anything a handler throws is caught and logged, and the next notification is delivered as
- * usual. A throwing handler never affects other handlers, other channels or the connection.
+ * usual. A throwing handler never affects other handlers, other channels, or the connection.
  */
 @FunctionalInterface
 public interface NotificationHandler {

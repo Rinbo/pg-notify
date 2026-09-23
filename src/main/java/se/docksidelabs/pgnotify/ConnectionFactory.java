@@ -18,92 +18,56 @@ package se.docksidelabs.pgnotify;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.time.Duration;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.function.Supplier;
-import org.postgresql.PGConnection;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
- * Opens the listener's dedicated connection and puts it in the state the listener needs: autocommit
- * on (Postgres holds notifications back while the receiving session is inside a transaction) and a
- * bounded network timeout so a dead peer cannot block a read forever.
- *
- * <p>In URL mode {@code tcpKeepAlive} and {@code ApplicationName} are set unless the caller's
- * properties already have them. In supplier mode the supplier is responsible for those.
+ * Where the listener's raw connections come from: a JDBC URL with properties, or an application
+ * supplier. Configuring the connection for listening is {@link ListenerSession}'s job.
  */
-final class ConnectionFactory {
+@FunctionalInterface
+interface ConnectionFactory {
 
-  private static final Logger log = LoggerFactory.getLogger(ConnectionFactory.class);
+  String DEFAULT_APPLICATION_NAME = "pg-notify";
 
-  @FunctionalInterface
-  private interface Opener {
-    Connection open() throws SQLException;
-  }
+  /** Opens a new connection. Called once per connection attempt. */
+  Connection open() throws SQLException;
 
-  private final Opener opener;
-
-  private ConnectionFactory(Opener opener) {
-    this.opener = opener;
-  }
-
-  static ConnectionFactory forUrl(String jdbcUrl, Properties properties, String applicationName) {
+  /**
+   * Connects through {@link DriverManager}. Adds {@code tcpKeepAlive=true} and {@code
+   * ApplicationName} unless the caller's properties already set them.
+   */
+  static ConnectionFactory forUrl(String jdbcUrl, Properties properties) {
     Objects.requireNonNull(jdbcUrl, "jdbcUrl");
-    Properties copy = new Properties();
+    Properties effective = new Properties();
     if (properties != null) {
       for (String name : properties.stringPropertyNames()) {
-        copy.setProperty(name, properties.getProperty(name));
+        effective.setProperty(name, properties.getProperty(name));
       }
     }
-    copy.putIfAbsent("ApplicationName", applicationName);
-    copy.putIfAbsent("tcpKeepAlive", "true");
-    return new ConnectionFactory(() -> DriverManager.getConnection(jdbcUrl, copy));
+    effective.putIfAbsent("ApplicationName", DEFAULT_APPLICATION_NAME);
+    effective.putIfAbsent("tcpKeepAlive", "true");
+    return () -> DriverManager.getConnection(jdbcUrl, effective);
   }
 
+  /**
+   * Delegates to the supplier; a thrown {@link RuntimeException} or a {@code null} becomes a
+   * failure.
+   */
   static ConnectionFactory forSupplier(Supplier<Connection> supplier) {
     Objects.requireNonNull(supplier, "connectionSupplier");
-    return new ConnectionFactory(
-        () -> {
-          Connection c;
-          try {
-            c = supplier.get();
-          } catch (RuntimeException e) {
-            throw new SQLException("connection supplier failed", e);
-          }
-          if (c == null) {
-            throw new SQLException("connection supplier returned null");
-          }
-          return c;
-        });
-  }
-
-  /** Opens and configures a connection. On any failure the connection is closed before rethrow. */
-  Connection open(Duration networkTimeout) throws SQLException {
-    Connection c = opener.open();
-    try {
-      if (c.isClosed()) {
-        throw new SQLException("connection is already closed");
+    return () -> {
+      Connection c;
+      try {
+        c = supplier.get();
+      } catch (RuntimeException e) {
+        throw new SQLException("connection supplier failed", e);
       }
-      c.unwrap(PGConnection.class);
-      c.setAutoCommit(true);
-      c.setNetworkTimeout(Runnable::run, (int) networkTimeout.toMillis());
+      if (c == null) {
+        throw new SQLException("connection supplier returned null");
+      }
       return c;
-    } catch (SQLException | RuntimeException e) {
-      closeQuietly(c);
-      throw e;
-    }
-  }
-
-  static void closeQuietly(Connection c) {
-    if (c == null) {
-      return;
-    }
-    try {
-      c.close();
-    } catch (SQLException | RuntimeException e) {
-      log.debug("Ignoring failure while closing connection", e);
-    }
+    };
   }
 }
