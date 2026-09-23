@@ -25,7 +25,7 @@ import java.util.Set;
 /**
  * Which handlers are registered on which channels.
  *
- * <p>Thread-safe. Every method is guarded by the instance monitor and every collection handed out
+ * <p>Thread-safe. Every method is guarded by the instance monitor, and every collection handed out
  * is a snapshot, so callers never observe a concurrent modification. Channel names are validated on
  * the way in, so anything stored here is safe to splice into {@code LISTEN}.
  */

@@ -30,7 +30,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Each channel has its own queue. At most one task per channel is ever handed to the executor at
  * a time; when it finishes, the next one for that channel is submitted. Channels therefore proceed
- * independently on a multi-threaded executor, and within a channel notifications are handled in
+ * independently on a multithreaded executor, and within a channel notifications are handled in
  * arrival order regardless of how many threads the executor has.
  *
  * <p>Queues are unbounded. Delivery is at-most-once anyway, and blocking the listener thread would

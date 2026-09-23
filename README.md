@@ -14,6 +14,27 @@ Status: pre-release, under active development. Not yet published to Maven Centra
 
 Requirements: Java 17+, pgjdbc, slf4j-api. Licensed under Apache-2.0.
 
+## Where the listener's connection comes from
+
+The listener needs one connection of its own, held for its whole lifetime. Two ways to give it one:
+
+```java
+// 1. Let the library open it
+PgListener.builder(jdbcUrl, properties)
+
+// 2. Open it yourself, for example from the coordinates your app already has
+PgListener.builder(() -> DriverManager.getConnection(url, user, password))
+```
+
+**Do not hand the listener a pooled connection.** In a Spring Boot service `dataSource::getConnection`
+is HikariCP, and a connection that never comes back looks like a leak to the pool and can be recycled
+out from under the listener, taking the subscriptions with it. Use option 2 with the same URL,
+username and password the pool was configured from (`DataSourceProperties` in Spring Boot).
+
+The publisher is the other way round: `PgNotifier.notify(connection, channel, payload)` runs on
+whatever connection your current transaction is using, pooled or not, so the notification is
+delivered on commit and dropped on rollback.
+
 ## Contributing
 
 Formatting is enforced by [Spotless](https://github.com/diffplug/spotless) with

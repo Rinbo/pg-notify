@@ -32,7 +32,7 @@ final class ListenerLoop implements Runnable {
   private static final Logger log = LoggerFactory.getLogger(ListenerLoop.class);
 
   private final ListenerConfig config;
-  private final ConnectionFactory connectionFactory;
+  private final ConnectionProvider connectionProvider;
   private final HandlerRegistry registry;
   private final SerialDispatcher dispatcher;
   private final Lifecycle lifecycle;
@@ -42,12 +42,12 @@ final class ListenerLoop implements Runnable {
 
   ListenerLoop(
       ListenerConfig config,
-      ConnectionFactory connectionFactory,
+      ConnectionProvider connectionProvider,
       HandlerRegistry registry,
       SerialDispatcher dispatcher,
       Lifecycle lifecycle) {
     this.config = config;
-    this.connectionFactory = connectionFactory;
+    this.connectionProvider = connectionProvider;
     this.registry = registry;
     this.dispatcher = dispatcher;
     this.lifecycle = lifecycle;
@@ -55,7 +55,7 @@ final class ListenerLoop implements Runnable {
 
   @Override
   public void run() {
-    try (ListenerSession s = ListenerSession.open(connectionFactory, config.networkTimeout())) {
+    try (ListenerSession s = ListenerSession.open(connectionProvider, config.networkTimeout())) {
       session = s;
       s.listen(registry.channels());
       if (!lifecycle.transition(State.CONNECTING, State.LISTENING)) {

@@ -15,7 +15,6 @@
  */
 package se.docksidelabs.pgnotify;
 
-import java.sql.Connection;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +22,6 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Supplier;
 
 /**
  * Listens for Postgres notifications on a dedicated connection and hands them to handlers.
@@ -65,7 +63,7 @@ public final class PgListener implements AutoCloseable {
 
   private final String name;
   private final ListenerConfig config;
-  private final ConnectionFactory connectionFactory;
+  private final ConnectionProvider connectionProvider;
   private final HandlerRegistry registry;
   private final HandlerExecutor executor;
   private final Lifecycle lifecycle = new Lifecycle();
@@ -78,12 +76,12 @@ public final class PgListener implements AutoCloseable {
   private PgListener(
       String name,
       ListenerConfig config,
-      ConnectionFactory connectionFactory,
+      ConnectionProvider connectionProvider,
       HandlerRegistry registry,
       HandlerExecutor executor) {
     this.name = name;
     this.config = config;
-    this.connectionFactory = connectionFactory;
+    this.connectionProvider = connectionProvider;
     this.registry = registry;
     this.executor = executor;
   }
@@ -97,18 +95,27 @@ public final class PgListener implements AutoCloseable {
    *     unless present.
    */
   public static Builder builder(String jdbcUrl, Properties properties) {
-    return new Builder(ConnectionFactory.forUrl(jdbcUrl, properties));
+    return new Builder(ConnectionProviders.forUrl(jdbcUrl, properties));
   }
 
   /**
-   * Starts building a listener that obtains its connection from {@code connectionSupplier}.
+   * Starts building a listener that opens its connection through {@code connectionProvider}.
    *
-   * <p>The supplier must return a new, unshared pgjdbc connection each time it is called; it is
-   * called again after every connection loss. Never return a pooled connection. The listener sets
-   * autocommit and a network timeout itself but relies on the supplier for TCP keepalive.
+   * <p>This is the overload to use when the application already knows how to reach its database,
+   * for example a Spring Boot service with a configured {@code DataSource}. <b>Do not pass the pool
+   * itself</b> ({@code dataSource::getConnection} on HikariCP or any other pool): the listener
+   * keeps its connection for life, which a pool treats as a leak, and pool housekeeping would drop
+   * the subscriptions. Open an unpooled connection from the same coordinates:
+   *
+   * <pre>{@code
+   * PgListener.builder(() -> DriverManager.getConnection(url, user, password))
+   * }</pre>
+   *
+   * <p>The provider is called again after every connection loss. See {@link ConnectionProvider} for
+   * what it must guarantee.
    */
-  public static Builder builder(Supplier<Connection> connectionSupplier) {
-    return new Builder(ConnectionFactory.forSupplier(connectionSupplier));
+  public static Builder builder(ConnectionProvider connectionProvider) {
+    return new Builder(Objects.requireNonNull(connectionProvider, "connectionProvider"));
   }
 
   /**
@@ -128,7 +135,7 @@ public final class PgListener implements AutoCloseable {
     }
     loop =
         new ListenerLoop(
-            config, connectionFactory, registry, new SerialDispatcher(executor), lifecycle);
+            config, connectionProvider, registry, new SerialDispatcher(executor), lifecycle);
     thread = new Thread(loop, name + "-listener");
     thread.setDaemon(true);
     thread.start();
@@ -231,13 +238,13 @@ public final class PgListener implements AutoCloseable {
 
     private record Registration(String channel, NotificationHandler handler) {}
 
-    private final ConnectionFactory connectionFactory;
+    private final ConnectionProvider connectionProvider;
     private final List<Registration> registrations = new ArrayList<>();
     private ListenerConfig config = ListenerConfig.DEFAULTS;
     private Executor handlerExecutor;
 
-    private Builder(ConnectionFactory connectionFactory) {
-      this.connectionFactory = connectionFactory;
+    private Builder(ConnectionProvider connectionProvider) {
+      this.connectionProvider = connectionProvider;
     }
 
     /** Registers a handler; same rules as {@link PgListener#listen}. */
@@ -294,7 +301,7 @@ public final class PgListener implements AutoCloseable {
           handlerExecutor == null
               ? HandlerExecutor.owned(name + "-handler")
               : HandlerExecutor.supplied(handlerExecutor);
-      return new PgListener(name, config, connectionFactory, registry, executor);
+      return new PgListener(name, config, connectionProvider, registry, executor);
     }
   }
 }

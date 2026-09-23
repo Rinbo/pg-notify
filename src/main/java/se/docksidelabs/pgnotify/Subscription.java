@@ -18,7 +18,7 @@ package se.docksidelabs.pgnotify;
 /**
  * A registered handler on a channel, returned by {@link PgListener#listen}.
  *
- * <p>Closing it removes the handler. When the last handler on a channel is removed the listener
+ * <p>Closing it removes the handler. When the last handler on a channel is removed, the listener
  * stops listening on that channel. Closing twice is harmless.
  */
 public interface Subscription extends AutoCloseable {

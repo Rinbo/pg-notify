@@ -15,30 +15,22 @@
  */
 package se.docksidelabs.pgnotify;
 
-import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.SQLException;
 import java.util.Objects;
 import java.util.Properties;
-import java.util.function.Supplier;
 
-/**
- * Where the listener's raw connections come from: a JDBC URL with properties, or an application
- * supplier. Configuring the connection for listening is {@link ListenerSession}'s job.
- */
-@FunctionalInterface
-interface ConnectionFactory {
+/** The library's own {@link ConnectionProvider} implementations. */
+final class ConnectionProviders {
 
-  String DEFAULT_APPLICATION_NAME = "pg-notify";
+  static final String DEFAULT_APPLICATION_NAME = "pg-notify";
 
-  /** Opens a new connection. Called once per connection attempt. */
-  Connection open() throws SQLException;
+  private ConnectionProviders() {}
 
   /**
    * Connects through {@link DriverManager}. Adds {@code tcpKeepAlive=true} and {@code
    * ApplicationName} unless the caller's properties already set them.
    */
-  static ConnectionFactory forUrl(String jdbcUrl, Properties properties) {
+  static ConnectionProvider forUrl(String jdbcUrl, Properties properties) {
     Objects.requireNonNull(jdbcUrl, "jdbcUrl");
     Properties effective = new Properties();
     if (properties != null) {
@@ -49,25 +41,5 @@ interface ConnectionFactory {
     effective.putIfAbsent("ApplicationName", DEFAULT_APPLICATION_NAME);
     effective.putIfAbsent("tcpKeepAlive", "true");
     return () -> DriverManager.getConnection(jdbcUrl, effective);
-  }
-
-  /**
-   * Delegates to the supplier; a thrown {@link RuntimeException} or a {@code null} becomes a
-   * failure.
-   */
-  static ConnectionFactory forSupplier(Supplier<Connection> supplier) {
-    Objects.requireNonNull(supplier, "connectionSupplier");
-    return () -> {
-      Connection c;
-      try {
-        c = supplier.get();
-      } catch (RuntimeException e) {
-        throw new SQLException("connection supplier failed", e);
-      }
-      if (c == null) {
-        throw new SQLException("connection supplier returned null");
-      }
-      return c;
-    };
   }
 }

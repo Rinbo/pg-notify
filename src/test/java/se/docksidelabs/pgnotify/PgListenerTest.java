@@ -264,11 +264,11 @@ class PgListenerTest {
   }
 
   @Test
-  void worksWithAConnectionSupplier() throws Exception {
+  void worksWithAConnectionProvider() throws Exception {
     String channel = channel();
     BlockingQueue<String> received = new LinkedBlockingQueue<>();
     PgListener listener =
-        PgListener.builder(PgListenerTest::supplierConnection)
+        PgListener.builder(PostgresSupport::connect)
             .pollTimeout(Duration.ofMillis(200))
             .listen(channel, n -> received.add(n.payload()))
             .build();
@@ -298,14 +298,6 @@ class PgListenerTest {
   }
 
   // ---- helpers ------------------------------------------------------------------------------
-
-  private static Connection supplierConnection() {
-    try {
-      return PostgresSupport.connect();
-    } catch (SQLException e) {
-      throw new IllegalStateException(e);
-    }
-  }
 
   private static PgListener.Builder builder() {
     Properties props = PostgresSupport.properties();

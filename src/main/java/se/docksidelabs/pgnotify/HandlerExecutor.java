@@ -25,8 +25,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The executor handlers run on, together with the ownership rule: an executor the listener created
- * is shut down by the listener; one supplied by the application is left alone.
+ * The executor handlers run on, together with the ownership rule: the listener shuts down an
+ * executor the listener created; one supplied by the application is left alone.
  */
 final class HandlerExecutor implements Executor {
 
@@ -79,7 +79,7 @@ final class HandlerExecutor implements Executor {
 
   /**
    * Shuts down an owned executor: lets queued work finish for up to {@code grace}, then interrupts.
-   * Called from one of its own threads it only initiates the shutdown, since waiting would
+   * Called from one of its own threads, it only initiates the shutdown, since waiting would
    * deadlock. No-op for a supplied executor.
    */
   void shutdown(Duration grace) {

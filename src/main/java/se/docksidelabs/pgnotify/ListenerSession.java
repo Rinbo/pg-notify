@@ -48,9 +48,17 @@ final class ListenerSession implements AutoCloseable {
   }
 
   /** Opens and configures a session. On failure the connection is closed before the rethrow. */
-  static ListenerSession open(ConnectionFactory factory, Duration networkTimeout)
+  static ListenerSession open(ConnectionProvider provider, Duration networkTimeout)
       throws SQLException {
-    Connection c = factory.open();
+    Connection c;
+    try {
+      c = provider.open();
+    } catch (RuntimeException e) {
+      throw new SQLException("connection provider failed", e);
+    }
+    if (c == null) {
+      throw new SQLException("connection provider returned null");
+    }
     try {
       if (c.isClosed()) {
         throw new SQLException("connection is already closed");
