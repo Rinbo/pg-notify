@@ -34,7 +34,8 @@ import org.slf4j.LoggerFactory;
  * arrival order regardless of how many threads the executor has.
  *
  * <p>Queues are unbounded. Delivery is at-most-once anyway, and blocking the listener thread would
- * only move the backlog into Postgres' own notification queue.
+ * only move the backlog into Postgres' own notification queue. For the same reason an executor that
+ * rejects work costs notifications, never the listener: the channel's queue is dropped and logged.
  */
 final class SerialDispatcher {
 
@@ -48,13 +49,12 @@ final class SerialDispatcher {
   }
 
   /**
-   * Queues {@code notification} for delivery to {@code handlers}, in list order.
-   *
-   * @throws RejectedExecutionException if the executor refuses the work
+   * Queues {@code notification} for delivery to {@code handlers}, in list order. Never throws: if
+   * the executor rejects the work, the channel's queued notifications are dropped with a warning.
    */
   void dispatch(Notification notification, List<NotificationHandler> handlers) {
     queues
-        .computeIfAbsent(notification.channel(), c -> new ChannelQueue())
+        .computeIfAbsent(notification.channel(), ChannelQueue::new)
         .submit(() -> deliver(notification, handlers));
   }
 
@@ -77,8 +77,13 @@ final class SerialDispatcher {
 
   /** The SerialExecutor pattern from the {@link Executor} javadoc, one per channel. */
   private final class ChannelQueue {
+    private final String channel;
     private final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
     private boolean active;
+
+    ChannelQueue(String channel) {
+      this.channel = channel;
+    }
 
     synchronized void submit(Runnable task) {
       tasks.add(task);
@@ -107,8 +112,11 @@ final class SerialDispatcher {
         int dropped = tasks.size() + 1;
         tasks.clear();
         active = false;
-        log.debug("Executor rejected work; dropping {} queued notification(s)", dropped);
-        throw e;
+        log.warn(
+            "Handler executor rejected work on channel '{}'; dropped {} notification(s): {}",
+            channel,
+            dropped,
+            e.toString());
       }
     }
   }

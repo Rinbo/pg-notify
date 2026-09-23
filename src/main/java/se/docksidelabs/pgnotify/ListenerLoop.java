@@ -25,7 +25,7 @@ import se.docksidelabs.pgnotify.PgListener.State;
 
 /**
  * What the listener thread does: connect, subscribe, poll until closed, and on any failure back off
- * and do it again. Never gives up; {@code close()} is the only exit.
+ * and do it again. Never gives up; {@code close()}, or interrupting the thread, is the only exit.
  *
  * <pre>
  * loop until closed:
@@ -53,8 +53,18 @@ final class ListenerLoop implements Runnable {
   /** The live session, published so {@link #abortSession()} can reach it from another thread. */
   private volatile ListenerSession session;
 
-  /** Consecutive failed attempts since the last successful subscription. */
+  /**
+   * Consecutive failures since the last successful subscription, driving the backoff. Losing a live
+   * session counts as one.
+   */
   private int failures;
+
+  /**
+   * Connection attempts since the last successful subscription, including one in progress. Unlike
+   * {@link #failures}, the lost session is not an attempt; zero means the failure being handled is
+   * the loss of a subscribed session.
+   */
+  private int attempts;
 
   /** When the last good connection was lost; {@code null} while connected. */
   private Instant disconnectedAt;
@@ -94,7 +104,8 @@ final class ListenerLoop implements Runnable {
       }
     } catch (RuntimeException e) {
       log.error("Listener loop failed; listener is now closed", e);
-      lifecycle.close();
+    } finally {
+      lifecycle.close(); // whatever ended the loop, the state must not claim it is still running
     }
   }
 
@@ -108,6 +119,7 @@ final class ListenerLoop implements Runnable {
 
   /** One connection's lifetime. Returns when closed; throws when the connection fails. */
   private void connectAndPoll() throws SQLException {
+    attempts++;
     try (ListenerSession s = ListenerSession.open(connectionProvider, config.networkTimeout())) {
       session = s;
       try {
@@ -131,15 +143,16 @@ final class ListenerLoop implements Runnable {
   }
 
   private void onSubscribed(ListenerSession s) {
-    int attempts = failures + 1;
+    int took = attempts;
+    attempts = 0;
     failures = 0;
     if (everConnected) {
-      ReconnectEvent event = new ReconnectEvent(disconnectedAt, Instant.now(), attempts);
+      ReconnectEvent event = new ReconnectEvent(disconnectedAt, Instant.now(), took);
       log.info(
           "Reconnected to backend pid {} after {} attempt(s); notifications during the {} outage"
               + " were lost",
           s.backendPid(),
-          attempts,
+          took,
           event.downtime());
       callbacks.reconnected(event);
     } else {
@@ -195,25 +208,33 @@ final class ListenerLoop implements Runnable {
   /**
    * Records a failure, notifies, and waits out the backoff.
    *
-   * @return {@code false} if the listener was closed, now or during the wait
+   * @return {@code false} if the listener was closed or the thread interrupted, now or during the
+   *     wait
    */
   private boolean backOff(SQLException cause) {
     if (lifecycle.isClosed()) {
       log.debug("Connection closed during shutdown", cause);
       return false;
     }
+    boolean sessionLost = attempts == 0;
     failures++;
     if (disconnectedAt == null) {
       disconnectedAt = Instant.now();
     }
     lifecycle.moveTo(State.RECONNECTING);
     Duration delay = reconnectPolicy.delay(failures);
-    log.warn("Connection attempt {} failed: {}; retrying in {}", failures, cause.toString(), delay);
+    if (sessionLost) {
+      log.warn("Connection lost: {}; reconnecting in {}", cause.toString(), delay);
+    } else {
+      log.warn(
+          "Connection attempt {} failed: {}; retrying in {}", attempts, cause.toString(), delay);
+    }
     log.debug("Failure detail", cause);
     callbacks.disconnected(cause);
     try {
       return !lifecycle.await(State.CLOSED, delay);
     } catch (InterruptedException e) {
+      log.warn("Listener thread interrupted; the listener is now closed");
       Thread.currentThread().interrupt();
       return false;
     }

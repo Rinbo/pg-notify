@@ -14,10 +14,13 @@ import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -258,6 +261,36 @@ class PgListenerTest {
     listener.close();
 
     assertThat(pool.isShutdown()).isFalse();
+  }
+
+  @Test
+  void aRejectingExecutorCostsTheNotificationButNotTheListener() throws Exception {
+    String channel = channel();
+    ExecutorService pool = pool(1);
+    AtomicBoolean saturated = new AtomicBoolean(true);
+    CountDownLatch rejected = new CountDownLatch(1);
+    BlockingQueue<String> received = new LinkedBlockingQueue<>();
+    PgListener listener =
+        start(
+            builder()
+                .handlerExecutor(
+                    task -> {
+                      if (saturated.get()) {
+                        rejected.countDown();
+                        throw new RejectedExecutionException("simulated: executor saturated");
+                      }
+                      pool.execute(task);
+                    })
+                .listen(channel, n -> received.add(n.payload())));
+
+    PgNotifier.notify(publisher, channel, "rejected");
+    assertThat(rejected.await(5, TimeUnit.SECONDS)).as("executor saw the task").isTrue();
+    saturated.set(false);
+    PgNotifier.notify(publisher, channel, "delivered");
+
+    assertThat(received.poll(5, TimeUnit.SECONDS)).isEqualTo("delivered");
+    assertThat(received).isEmpty();
+    assertThat(listener.state()).isEqualTo(PgListener.State.LISTENING);
   }
 
   @Test

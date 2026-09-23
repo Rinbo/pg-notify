@@ -3,8 +3,11 @@ package se.docksidelabs.pgnotify;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class ReconnectPolicyTest {
@@ -21,6 +24,15 @@ class ReconnectPolicyTest {
     assertThat(policy.cap(7)).isEqualTo(5_000);
     assertThat(policy.cap(100)).isEqualTo(5_000);
     assertThat(policy.cap(Integer.MAX_VALUE)).as("no overflow").isEqualTo(5_000);
+  }
+
+  @Test
+  void separateJvmsDrawDifferentDelays() throws Exception {
+    String first = runJitterProbe();
+    String second = runJitterProbe();
+
+    assertThat(first).matches("\\d+( \\d+){7}");
+    assertThat(second).as("jitter must not repeat across JVMs").isNotEqualTo(first);
   }
 
   @Test
@@ -42,5 +54,20 @@ class ReconnectPolicyTest {
   @Test
   void rejectsZeroFailures() {
     assertThatIllegalArgumentException().isThrownBy(() -> policy.delay(0));
+  }
+
+  private static String runJitterProbe() throws Exception {
+    Process process =
+        new ProcessBuilder(
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                "-cp",
+                System.getProperty("java.class.path"),
+                JitterProbe.class.getName())
+            .redirectErrorStream(true)
+            .start();
+    String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+    assertThat(process.waitFor(30, TimeUnit.SECONDS)).as("probe finished").isTrue();
+    assertThat(process.exitValue()).as(output).isZero();
+    return output.trim();
   }
 }

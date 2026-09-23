@@ -3,6 +3,7 @@ package se.docksidelabs.pgnotify;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -100,7 +101,7 @@ class PgListenerReconnectTest {
 
     ReconnectEvent event = recorder.reconnects.poll(5, TimeUnit.SECONDS);
     assertThat(event).isNotNull();
-    assertThat(event.attempts()).isGreaterThanOrEqualTo(1);
+    assertThat(event.attempts()).as("the lost session is not an attempt").isEqualTo(1);
     assertThat(event.downtime()).isPositive();
     assertThat(event.disconnectedAt()).isBeforeOrEqualTo(event.reconnectedAt());
     assertThat(recorder.connected).hasValue(1);
@@ -110,6 +111,28 @@ class PgListenerReconnectTest {
     PgNotifier.notify(admin, b, "after-b");
     assertThat(received.poll(5, TimeUnit.SECONDS)).isEqualTo(a + ":after-a");
     assertThat(received.poll(5, TimeUnit.SECONDS)).isEqualTo(b + ":after-b");
+  }
+
+  @Test
+  void attemptsCountsFailedConnectionAttemptsAfterTheLoss() throws Exception {
+    AtomicInteger failuresToInject = new AtomicInteger();
+    RecordingListener recorder = new RecordingListener();
+    PgListener listener =
+        PgListener.builder(failingFirst(failuresToInject))
+            .pollTimeout(Duration.ofMillis(100))
+            .backoff(Duration.ofMillis(20), Duration.ofMillis(200))
+            .connectionListener(recorder)
+            .listen(channel(), n -> {})
+            .build();
+    start(listener);
+
+    failuresToInject.set(2);
+    terminateBackend(backendPid());
+
+    ReconnectEvent event = recorder.reconnects.poll(10, TimeUnit.SECONDS);
+    assertThat(event).isNotNull();
+    assertThat(event.attempts()).as("two failed attempts, then success").isEqualTo(3);
+    assertThat(recorder.disconnects).as("the loss plus each failed attempt").hasSize(3);
   }
 
   @Test
@@ -225,6 +248,13 @@ class PgListenerReconnectTest {
                 new ConnectionListener() {
                   @Override
                   public void onConnected() {
+                    throw new AssertionError("an Error is isolated too");
+                  }
+                })
+            .connectionListener(
+                new ConnectionListener() {
+                  @Override
+                  public void onConnected() {
                     order.add("second");
                   }
                 })
@@ -235,7 +265,62 @@ class PgListenerReconnectTest {
     assertThat(order.poll(5, TimeUnit.SECONDS)).isEqualTo("second");
   }
 
+  @Test
+  void anInterruptedListenerThreadEndsClosedAndCloseStillReleasesTheHandlerThread()
+      throws Exception {
+    AtomicInteger failuresToInject = new AtomicInteger();
+    BlockingQueue<String> handlerThreads = new LinkedBlockingQueue<>();
+    String channel = channel();
+    PgListener listener =
+        PgListener.builder(failingFirst(failuresToInject))
+            .pollTimeout(Duration.ofMillis(100))
+            .backoff(Duration.ofMillis(20), Duration.ofMillis(200))
+            .listen(channel, n -> handlerThreads.add(Thread.currentThread().getName()))
+            .build();
+    start(listener);
+    PgNotifier.notify(admin, channel, "start the handler thread");
+    String handlerThread = handlerThreads.poll(5, TimeUnit.SECONDS);
+    assertThat(handlerThread).endsWith("-handler");
+    String listenerThread = handlerThread.replaceFirst("-handler$", "-listener");
+
+    failuresToInject.set(Integer.MAX_VALUE);
+    terminateBackend(backendPid());
+    awaitState(listener, PgListener.State.RECONNECTING);
+    liveThreadsNamed(listenerThread).forEach(Thread::interrupt);
+
+    awaitState(listener, PgListener.State.CLOSED);
+    listener.close();
+    awaitNoLiveThread(listenerThread);
+    awaitNoLiveThread(handlerThread);
+  }
+
   // ---- helpers ------------------------------------------------------------------------------
+
+  /** Opens listener connections, failing the next {@code failuresToInject} calls first. */
+  private ConnectionProvider failingFirst(AtomicInteger failuresToInject) {
+    return () -> {
+      if (failuresToInject.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
+        throw new SQLException("simulated: still down");
+      }
+      Properties props = PostgresSupport.properties();
+      props.setProperty("ApplicationName", appName);
+      return DriverManager.getConnection(PostgresSupport.jdbcUrl(), props);
+    };
+  }
+
+  private static List<Thread> liveThreadsNamed(String name) {
+    return Thread.getAllStackTraces().keySet().stream()
+        .filter(t -> t.isAlive() && t.getName().equals(name))
+        .toList();
+  }
+
+  private static void awaitNoLiveThread(String name) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+    while (!liveThreadsNamed(name).isEmpty() && System.nanoTime() < deadline) {
+      Thread.sleep(10);
+    }
+    assertThat(liveThreadsNamed(name)).as("live threads named %s", name).isEmpty();
+  }
 
   private PgListener.Builder builder() {
     Properties props = PostgresSupport.properties();

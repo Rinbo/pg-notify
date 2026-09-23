@@ -21,7 +21,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Fans one connection event out to every registered {@link ConnectionListener}, isolating failures.
+ * Fans one connection event out to every registered {@link ConnectionListener}, isolating failures
+ * the same way handlers are isolated: anything but a {@link VirtualMachineError} is logged and the
+ * next listener runs.
  */
 final class ConnectionCallbacks {
 
@@ -49,8 +51,10 @@ final class ConnectionCallbacks {
     for (ConnectionListener listener : listeners) {
       try {
         call.accept(listener);
-      } catch (RuntimeException e) {
-        log.warn("ConnectionListener {} threw from {}; ignoring", listener, name, e);
+      } catch (VirtualMachineError e) {
+        throw e;
+      } catch (Throwable t) {
+        log.warn("ConnectionListener {} threw from {}; ignoring", listener, name, t);
       }
     }
   }

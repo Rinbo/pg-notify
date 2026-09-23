@@ -16,6 +16,7 @@
 package se.docksidelabs.pgnotify;
 
 import java.time.Duration;
+import java.util.SplittableRandom;
 import java.util.random.RandomGenerator;
 
 /**
@@ -23,13 +24,21 @@ import java.util.random.RandomGenerator;
  * {@code [0, min(max, initial * 2^(n-1))]}, where {@code n} is the number of consecutive failures.
  *
  * <p>Full jitter spreads reconnecting clients across the whole window, so a fleet that lost the
- * same database does not hammer it in lockstep when it comes back.
+ * same database does not hammer it in lockstep when it comes back. That only works if each instance
+ * draws its own sequence, so the policy owns its random source. A {@code ThreadLocalRandom}
+ * obtained on one thread and used on another reads the using thread's seed, which on a fresh
+ * listener thread is uninitialised: every JVM would draw the same "random" delays.
  */
 final class ReconnectPolicy {
 
   private final long initialMillis;
   private final long maxMillis;
   private final RandomGenerator random;
+
+  /** A policy with its own randomly seeded source. Use from one thread at a time. */
+  ReconnectPolicy(Duration initial, Duration max) {
+    this(initial, max, new SplittableRandom());
+  }
 
   ReconnectPolicy(Duration initial, Duration max, RandomGenerator random) {
     this.initialMillis = initial.toMillis();

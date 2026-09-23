@@ -28,7 +28,7 @@ package se.docksidelabs.pgnotify;
  * so when {@link PgListener#awaitListening} returns {@code true} the callback has completed.
  * Handler tasks from the old connection that are still queued may run after it. Keep callbacks
  * short, or hand the work to another thread: while a callback runs nothing is read from Postgres.
- * Anything a callback throws is logged and ignored.
+ * Anything a callback throws, other than a {@link VirtualMachineError}, is logged and ignored.
  */
 public interface ConnectionListener {
 

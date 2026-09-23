@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -72,6 +71,12 @@ public final class PgListener implements AutoCloseable {
   private final ConnectionCallbacks callbacks;
   private final Lifecycle lifecycle = new Lifecycle();
   private final ChannelChanges changes = new ChannelChanges();
+
+  /**
+   * Whether {@link #close()} has released the resources. Separate from the lifecycle, which the
+   * loop may already have closed on its own; the cleanup must still run once.
+   */
+  private final AtomicBoolean released = new AtomicBoolean();
 
   /** Set by {@link #start()}; guarded by {@code this}. */
   private ListenerLoop loop;
@@ -151,8 +156,7 @@ public final class PgListener implements AutoCloseable {
             new SerialDispatcher(executor),
             lifecycle,
             callbacks,
-            new ReconnectPolicy(
-                config.backoffInitial(), config.backoffMax(), ThreadLocalRandom.current()));
+            new ReconnectPolicy(config.backoffInitial(), config.backoffMax()));
     thread = new Thread(loop, name + "-listener");
     thread.setDaemon(true);
     thread.start();
@@ -229,7 +233,8 @@ public final class PgListener implements AutoCloseable {
    */
   @Override
   public void close() {
-    if (!lifecycle.close()) {
+    lifecycle.close();
+    if (!released.compareAndSet(false, true)) {
       return;
     }
     Thread t;
