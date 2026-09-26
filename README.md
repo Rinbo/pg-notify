@@ -75,7 +75,7 @@ when it goes.
 <dependency>
   <groupId>se.docksidelabs</groupId>
   <artifactId>pg-notify</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.0</version>
 </dependency>
 ```
 
