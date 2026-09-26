@@ -10,7 +10,7 @@
 
   <name>pg-notify</name>
   <description>Correct, lightweight Postgres LISTEN/NOTIFY for the JVM: dedicated connection, reconnect with re-LISTEN, ordered async dispatch, transactional publisher.</description>
-  <url>https://github.com/dockside-labs/pg-notify</url>
+  <url>https://github.com/Rinbo/pg-notify</url>
   <inceptionYear>2026</inceptionYear>
 
   <organization>
@@ -26,11 +26,26 @@
     </license>
   </licenses>
 
+  <developers>
+    <developer>
+      <id>Rinbo</id>
+      <name>Robin Börjesson</name>
+      <url>https://github.com/Rinbo</url>
+      <organization>Dockside Labs</organization>
+      <organizationUrl>https://docksidelabs.se</organizationUrl>
+    </developer>
+  </developers>
+
   <scm>
-    <connection>scm:git:https://github.com/dockside-labs/pg-notify.git</connection>
-    <developerConnection>scm:git:git@github.com:dockside-labs/pg-notify.git</developerConnection>
-    <url>https://github.com/dockside-labs/pg-notify</url>
+    <connection>scm:git:https://github.com/Rinbo/pg-notify.git</connection>
+    <developerConnection>scm:git:git@github.com:Rinbo/pg-notify.git</developerConnection>
+    <url>https://github.com/Rinbo/pg-notify</url>
   </scm>
+
+  <issueManagement>
+    <system>GitHub</system>
+    <url>https://github.com/Rinbo/pg-notify/issues</url>
+  </issueManagement>
 
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
@@ -55,6 +70,8 @@
     <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
     <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
     <spotless-maven-plugin.version>3.10.2</spotless-maven-plugin.version>
+    <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
+    <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
     <google-java-format.version>1.36.1</google-java-format.version>
   </properties>
 
@@ -262,6 +279,66 @@
         <spotless.check.skip>true</spotless.check.skip>
         <spotless.apply.skip>true</spotless.apply.skip>
       </properties>
+    </profile>
+    <profile>
+      <!--
+        Signs and uploads to Maven Central. Run by .github/workflows/release.yml when a v* tag is
+        pushed; see RELEASING.md. The key and passphrase come from MAVEN_GPG_KEY and
+        MAVEN_GPG_PASSPHRASE, the Central token from the `central` server in settings.xml.
+      -->
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-enforcer-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>enforce-release-version</id>
+                <goals>
+                  <goal>enforce</goal>
+                </goals>
+                <configuration>
+                  <rules>
+                    <requireReleaseVersion/>
+                  </rules>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>${maven-gpg-plugin.version}</version>
+            <configuration>
+              <!-- Pure-Java signer: needs no gpg binary or keyring on the build machine. -->
+              <signer>bc</signer>
+              <bestPractices>true</bestPractices>
+            </configuration>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+                <phase>verify</phase>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>${central-publishing-maven-plugin.version}</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <!-- Uploaded and validated, then held until Publish is pressed in the Central Portal. -->
+              <autoPublish>false</autoPublish>
+              <waitUntil>validated</waitUntil>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
     </profile>
   </profiles>
 </project>
