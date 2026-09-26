@@ -68,6 +68,7 @@ public final class PgListener implements AutoCloseable {
   private final ConnectionProvider connectionProvider;
   private final HandlerRegistry registry;
   private final HandlerExecutor executor;
+  private final SerialDispatcher dispatcher;
   private final ConnectionCallbacks callbacks;
   private final Lifecycle lifecycle = new Lifecycle();
   private final ChannelChanges changes = new ChannelChanges();
@@ -89,12 +90,14 @@ public final class PgListener implements AutoCloseable {
       ConnectionProvider connectionProvider,
       HandlerRegistry registry,
       HandlerExecutor executor,
+      SerialDispatcher dispatcher,
       ConnectionCallbacks callbacks) {
     this.name = name;
     this.config = config;
     this.connectionProvider = connectionProvider;
     this.registry = registry;
     this.executor = executor;
+    this.dispatcher = dispatcher;
     this.callbacks = callbacks;
   }
 
@@ -153,7 +156,7 @@ public final class PgListener implements AutoCloseable {
             connectionProvider,
             registry,
             changes,
-            new SerialDispatcher(executor),
+            dispatcher,
             lifecycle,
             callbacks,
             new ReconnectPolicy(config.backoffInitial(), config.backoffMax()));
@@ -255,7 +258,26 @@ public final class PgListener implements AutoCloseable {
         join(t, Duration.ofSeconds(5));
       }
     }
-    executor.shutdown(config.shutdownTimeout());
+    shutDownHandlers();
+  }
+
+  /**
+   * Lets queued handler work finish within the shutdown timeout, then stops the owned executor. The
+   * dispatcher holds back all but one task per channel, and the executor rejects those once shut
+   * down, so the wait for the dispatcher to drain comes first.
+   */
+  private void shutDownHandlers() {
+    Duration grace = config.shutdownTimeout();
+    long start = System.nanoTime();
+    if (executor.isOwned() && !executor.onHandlerThread()) {
+      try {
+        dispatcher.awaitIdle(grace);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt(); // the executor shutdown below then interrupts handlers
+      }
+    }
+    Duration left = grace.minusNanos(System.nanoTime() - start);
+    executor.shutdown(left.isNegative() ? Duration.ZERO : left);
   }
 
   private static void join(Thread t, Duration timeout) {
@@ -383,8 +405,9 @@ public final class PgListener implements AutoCloseable {
           name,
           config,
           connectionProvider,
-          registry,
+          registry.copy(), // the builder stays reusable without sharing state with this listener
           executor,
+          new SerialDispatcher(executor),
           new ConnectionCallbacks(connectionListeners));
     }
   }

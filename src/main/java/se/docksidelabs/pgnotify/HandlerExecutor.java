@@ -72,6 +72,11 @@ final class HandlerExecutor implements Executor {
     delegate.execute(task);
   }
 
+  /** {@code true} if the listener created this executor and shuts it down. */
+  boolean isOwned() {
+    return owned != null;
+  }
+
   /** {@code true} when called from a thread this executor owns. Always false when supplied. */
   boolean onHandlerThread() {
     return Thread.currentThread() instanceof HandlerThread t && t.owner == this;
@@ -92,7 +97,7 @@ final class HandlerExecutor implements Executor {
     }
     try {
       if (!owned.awaitTermination(grace.toMillis(), TimeUnit.MILLISECONDS)) {
-        log.warn("Handlers still running after {}; interrupting them", grace);
+        log.warn("Handlers still running at the end of the shutdown timeout; interrupting them");
         owned.shutdownNow();
       }
     } catch (InterruptedException e) {

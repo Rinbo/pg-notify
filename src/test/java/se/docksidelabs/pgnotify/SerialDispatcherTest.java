@@ -3,6 +3,7 @@ package se.docksidelabs.pgnotify;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -131,6 +132,22 @@ class SerialDispatcherTest {
     executor.runAll();
     assertThat(log).containsExactly("h:a:1", "h:a:2", "h:a:3");
     assertThat(dispatcher.activeChannels()).isZero();
+  }
+
+  @Test
+  void awaitIdleReturnsOnceEveryChannelHasDrained() throws Exception {
+    dispatcher.dispatch(n("a", "1"), List.of(recording("h")));
+    dispatcher.dispatch(n("a", "2"), List.of(recording("h")));
+    dispatcher.dispatch(n("b", "1"), List.of(recording("h")));
+    assertThat(dispatcher.awaitIdle(Duration.ofMillis(50))).as("work still queued").isFalse();
+
+    Thread cranker = new Thread(executor::runAll, "cranker");
+    cranker.start();
+
+    assertThat(dispatcher.awaitIdle(Duration.ofSeconds(5))).isTrue();
+    cranker.join(5_000);
+    assertThat(log).hasSize(3);
+    assertThat(new SerialDispatcher(executor).awaitIdle(Duration.ZERO)).as("never used").isTrue();
   }
 
   @Test

@@ -16,12 +16,14 @@
 package se.docksidelabs.pgnotify;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,6 +51,9 @@ final class SerialDispatcher {
   private final Executor executor;
   private final Map<String, ChannelQueue> queues = new ConcurrentHashMap<>();
 
+  /** Signalled whenever a queue retires; see {@link #awaitIdle}. Taken after a queue lock. */
+  private final Object idle = new Object();
+
   SerialDispatcher(Executor executor) {
     this.executor = executor;
   }
@@ -71,6 +76,27 @@ final class SerialDispatcher {
   /** Channels that currently have a queue, that is, work queued or running. */
   int activeChannels() {
     return queues.size();
+  }
+
+  /**
+   * Waits until no channel has work queued or running, or the timeout elapses. Call it before
+   * shutting the executor down: only one task per channel is ever inside the executor, and a shut
+   * down executor rejects the rest. Meaningful once nothing dispatches any more.
+   *
+   * @return {@code true} if idle
+   */
+  boolean awaitIdle(Duration timeout) throws InterruptedException {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    synchronized (idle) {
+      while (!queues.isEmpty()) {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) {
+          return false;
+        }
+        TimeUnit.NANOSECONDS.timedWait(idle, remaining);
+      }
+      return true;
+    }
   }
 
   private static void deliver(Notification n, List<NotificationHandler> handlers) {
@@ -178,6 +204,9 @@ final class SerialDispatcher {
       active = false;
       retired = true;
       queues.remove(channel, this);
+      synchronized (idle) {
+        idle.notifyAll();
+      }
     }
   }
 }

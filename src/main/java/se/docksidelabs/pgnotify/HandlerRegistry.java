@@ -75,4 +75,11 @@ final class HandlerRegistry {
   synchronized int channelCount() {
     return handlers.size();
   }
+
+  /** An independent registry with the same channels and handlers, in the same order. */
+  synchronized HandlerRegistry copy() {
+    HandlerRegistry copy = new HandlerRegistry();
+    handlers.forEach((channel, list) -> copy.handlers.put(channel, new ArrayList<>(list)));
+    return copy;
+  }
 }

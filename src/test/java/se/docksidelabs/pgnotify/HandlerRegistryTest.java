@@ -65,6 +65,20 @@ class HandlerRegistryTest {
   }
 
   @Test
+  void copyIsIndependentOfTheOriginal() {
+    registry.add("a", h1);
+    HandlerRegistry copy = registry.copy();
+
+    registry.add("a", h2);
+    registry.add("b", h1);
+    assertThat(copy.remove("a", h1)).isTrue();
+
+    assertThat(copy.channels()).isEmpty();
+    assertThat(registry.channels()).containsExactly("a", "b");
+    assertThat(registry.handlersFor("a")).containsExactly(h1, h2);
+  }
+
+  @Test
   void validatesChannelNames() {
     assertThatIllegalArgumentException().isThrownBy(() -> registry.add("", h1));
     assertThatIllegalArgumentException().isThrownBy(() -> registry.add("x".repeat(64), h1));

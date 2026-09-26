@@ -21,6 +21,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
@@ -308,6 +309,67 @@ class PgListenerTest {
     listener.close();
 
     assertThat(pool.isShutdown()).isFalse();
+  }
+
+  @Test
+  void closeLetsNotificationsQueuedOnAChannelFinish() throws Exception {
+    String channel = channel();
+    int count = 5;
+    CountDownLatch firstRunning = new CountDownLatch(1);
+    AtomicInteger handled = new AtomicInteger();
+    PgListener listener =
+        start(
+            builder()
+                .listen(
+                    channel,
+                    n -> {
+                      firstRunning.countDown();
+                      Thread.sleep(50);
+                      handled.incrementAndGet();
+                    }));
+    publisher.setAutoCommit(false);
+    for (int i = 0; i < count; i++) {
+      PgNotifier.notify(publisher, channel, Integer.toString(i));
+    }
+    publisher.commit();
+    assertThat(firstRunning.await(5, TimeUnit.SECONDS)).isTrue();
+
+    listener.close();
+
+    assertThat(handled)
+        .as("queued behind the running one, not only the running one")
+        .hasValue(count);
+  }
+
+  @Test
+  void closeInterruptsQueuedWorkThatOutlivesTheShutdownTimeout() throws Exception {
+    String channel = channel();
+    CountDownLatch firstRunning = new CountDownLatch(1);
+    PgListener listener =
+        start(
+            builder()
+                .shutdownTimeout(Duration.ofMillis(300))
+                .listen(
+                    channel,
+                    n -> {
+                      firstRunning.countDown();
+                      Thread.sleep(10_000);
+                    }));
+    publisher.setAutoCommit(false);
+    PgNotifier.notify(publisher, channel, "1");
+    PgNotifier.notify(publisher, channel, "2");
+    publisher.commit();
+    assertThat(firstRunning.await(5, TimeUnit.SECONDS)).isTrue();
+
+    long before = System.nanoTime();
+    listener.close();
+    Duration took = Duration.ofNanos(System.nanoTime() - before);
+
+    assertThat(took).isLessThan(Duration.ofSeconds(3));
+    for (int i = 0; i < 50 && !liveThreadsNamed("pg-notify-").isEmpty(); i++) {
+      Thread.sleep(100);
+    }
+    assertThat(liveThreadsNamed("pg-notify-")).as("handler thread interrupted").isEmpty();
   }
 
   @Test
