@@ -71,8 +71,6 @@ when it goes.
 
 ## Quick start
 
-Not yet on Maven Central. Build locally with `mvn install` and depend on:
-
 ```xml
 <dependency>
   <groupId>se.docksidelabs</groupId>
